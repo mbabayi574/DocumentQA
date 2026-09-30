@@ -1,14 +1,57 @@
 [project]
-name = "documentqa"
+name = "qasystem"
 version = "0.1.0"
-description = "Add your description here"
+description = "LLM-free extractive document QA (SQLite + FTS5 + local persistent ChromaDB)"
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.142.2",
+    "uvicorn==0.54.0",
+    "python-multipart==0.0.32",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "httpx==0.28.1",
+    "pymupdf==1.28.2",
+    "markdown-it-py==4.2.0",
+    "chromadb==1.5.9",
+    "numpy==2.5.3",
+    "filelock==4.0.7",
+]
 
-[project.scripts]
-documentqa = "documentqa:main"
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "respx==0.23.1",
+    "hypothesis==6.168.3",
+    "ruff==0.16.9",
+    "mypy==2.3.1",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["src/qasystem"]
+omit = ["*/tests/*"]

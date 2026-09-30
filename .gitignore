@@ -11,4 +11,15 @@ wheels/
 
 .env
 
+# Runtime data: SQLite db, local Chroma dir, single-instance lock
+/data/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
 /tests/fixtures/docs/
