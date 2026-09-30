@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import os
+import socket
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
 from qasystem.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """plan.md §0.6: no test may touch the network. Live calls need RUN_LIVE=1."""
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("tests must not open sockets (set RUN_LIVE=1 to opt out)")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
 
 
 @pytest.fixture(autouse=True)
