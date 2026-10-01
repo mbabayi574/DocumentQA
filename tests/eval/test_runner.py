@@ -344,8 +344,26 @@ def test_the_grid_search_refuses_any_point_that_answers_an_unanswerable_case() -
 def test_choose_maximises_answered_on_answerable_and_takes_the_strictest_bar() -> None:
     """§9.3's objective, and the tie-break: among points that tie on recall and on false
     answers, the one that refuses the most marginal evidence is the one to ship."""
-    loose = Thresholds(0.40, 0.50, 0.2, 0.8, 0.5, 0.15, 1, False, "fake")
-    strict = Thresholds(0.45, 0.58, 0.2, 0.8, 0.5, 0.15, 1, False, "fake")
+    loose = Thresholds(
+        min_dense=0.40,
+        min_dense_alone=0.50,
+        min_coverage=0.2,
+        min_coverage_high=0.5,
+        min_sentence_overlap=0.15,
+        version=1,
+        calibrated=False,
+        model_id="fake",
+    )
+    strict = Thresholds(
+        min_dense=0.45,
+        min_dense_alone=0.58,
+        min_coverage=0.2,
+        min_coverage_high=0.5,
+        min_sentence_overlap=0.15,
+        version=1,
+        calibrated=False,
+        model_id="fake",
+    )
     metrics = score(CALIBRATION_CASES, label="same")
     chosen, _ = choose([(loose, metrics), (strict, metrics)])
     assert chosen is strict
@@ -546,7 +564,16 @@ def test_a_calibration_carries_the_numbers_that_produced_it() -> None:
     from .runner import thresholds_payload
 
     calibration = Calibration(
-        thresholds=Thresholds(0.4, 0.5, 0.2, 0.8, 0.5, 0.15, 1, False, "Bge-m3"),
+        thresholds=Thresholds(
+            min_dense=0.4,
+            min_dense_alone=0.5,
+            min_coverage=0.2,
+            min_coverage_high=0.5,
+            min_sentence_overlap=0.15,
+            version=1,
+            calibrated=False,
+            model_id="Bge-m3",
+        ),
         dev=score(CALIBRATION_CASES, label="dev"),
         test=score(CALIBRATION_CASES, label="test"),
         feasible_points=12,

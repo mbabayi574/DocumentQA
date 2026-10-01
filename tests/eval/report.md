@@ -34,7 +34,7 @@ column requirement 4 of jobTask.md is actually about (D60).
 
 ## Latency
 
-- end to end, each question asked once, cold: **P50 355 ms, P95 1041 ms**, max 1718 ms
+- end to end, each question asked once, cold: **P50 328 ms, P95 455 ms**, max 521 ms
 - the same questions again with the query cache warm, so no network: **P50 10 ms**, P95 11 ms
 
 The tail is the embedding provider's, not this system's (D54). Everything here builds
@@ -58,13 +58,12 @@ qualification is measuring someone else's server.
   "min_dense": 0.52,
   "min_dense_alone": 0.66,
   "min_coverage": 0.4,
-  "min_lexical": 0.8,
   "min_coverage_high": 0.8,
   "min_sentence_overlap": 0.15
 }
 ```
 
-Chosen by grid search on **dev** only: 26040 feasible of 153153 tested (a point is feasible when it refuses every
+Chosen by grid search on **dev** only: 8680 feasible of 51051 tested (a point is feasible when it refuses every
 unanswerable dev case). Reported on the held-out split by rebuilding the real
 service with these numbers.
 

@@ -7,7 +7,7 @@ so it is deliberately a small, readable, auditable rule rather than a score:
 ```text
 passed = (max_dense >= min_dense           AND coverage >= min_coverage)
       OR (max_dense >= min_dense_alone)                    # uncorroborated, see below
-      OR (lexical   >= min_lexical         AND coverage >= min_coverage_high)
+      OR (coverage   >= min_coverage_high)                  # exact terms, see below
 ```
 
 Three disjuncts, because there are three evidentiary situations, and they are not the same:
@@ -20,8 +20,19 @@ Three disjuncts, because there are three evidentiary situations, and they are no
   authorise the system's own headline capability, and the live run refused a correctly
   retrieved cross-lingual answer every time (D47). This branch exists for that case and
   demands a *higher* dense bar, because nothing corroborates it.
-* **Lexical exact terms** -- identifiers and numbers, where the match is exact and coverage
-  is the evidence.
+* **Exact terms** -- identifiers and numbers, where the match is exact and coverage is the
+  evidence. This branch asks for no similarity at all, which is right for ``ERR-404``: a chunk
+  containing every word of the question is the answer whatever the embedding thinks.
+
+  It used to read ``lexical >= min_lexical AND coverage >= min_coverage_high``, and
+  ``min_lexical`` was removed in P10 because it could not discriminate anything. ``lexical_score``
+  is ``bm25 / best_bm25 of the same query``, so the top lexical hit is exactly **1.0 for every
+  query FTS matched at all** -- measured at 1.00 for 49 of the 50 eval questions, answerable and
+  unanswerable alike (D58). Since FTS indexes the same tokenizer output that ``token_coverage``
+  counts, ``coverage > 0`` implies FTS matched, so the clause was always true whenever it could
+  be: the branch had one live setting and the threshold was decoration. Deleting it is a
+  behaviour-preserving change, and ``test_the_retired_lexical_threshold_cannot_change_a_verdict``
+  is what holds that claim.
 
 Thresholds are keyed by ``model_id``: a similarity of 0.6 means something specific about the
 model that produced it, so another model's numbers are refused rather than reused (the I9
@@ -50,7 +61,6 @@ THRESHOLD_FIELDS = (
     "min_dense",
     "min_dense_alone",
     "min_coverage",
-    "min_lexical",
     "min_coverage_high",
     "min_sentence_overlap",
 )
@@ -63,7 +73,6 @@ class Thresholds:
     min_dense: float
     min_dense_alone: float
     min_coverage: float
-    min_lexical: float
     min_coverage_high: float
     min_sentence_overlap: float
     version: int
@@ -136,8 +145,8 @@ def evaluate(signals: GateSignals, thresholds: Thresholds) -> GateVerdict:
         return GateVerdict(True, "dense+coverage", signals, t)
     if signals.max_dense >= t.min_dense_alone:
         return GateVerdict(True, "dense_only", signals, t)
-    if signals.lexical >= t.min_lexical and signals.token_coverage >= t.min_coverage_high:
-        return GateVerdict(True, "lexical+coverage", signals, t)
+    if signals.token_coverage >= t.min_coverage_high:
+        return GateVerdict(True, "exact_terms", signals, t)
     return GateVerdict(False, "below_threshold", signals, t)
 
 
@@ -157,7 +166,6 @@ def defaults(model_id: str) -> Thresholds:
         min_dense=0.47,
         min_dense_alone=0.50,
         min_coverage=0.25,
-        min_lexical=0.80,
         min_coverage_high=0.50,
         min_sentence_overlap=0.15,
         version=1,

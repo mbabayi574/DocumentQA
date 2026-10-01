@@ -82,7 +82,6 @@ def thresholds(**overrides: Any) -> Thresholds:
         # uncorroborated dense branch stays out of the way: these tests are about coverage.
         "min_dense_alone": 0.99,
         "min_coverage": 0.70,
-        "min_lexical": 0.50,
         "min_coverage_high": 0.90,
         "min_sentence_overlap": 0.15,
         "version": 1,

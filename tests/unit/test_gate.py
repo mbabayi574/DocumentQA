@@ -31,7 +31,6 @@ def thresholds(**overrides: Any) -> Thresholds:
         "min_dense": 0.60,
         "min_dense_alone": 0.70,
         "min_coverage": 0.30,
-        "min_lexical": 0.80,
         "min_coverage_high": 0.50,
         "min_sentence_overlap": 0.15,
         "version": 1,
@@ -63,7 +62,6 @@ def write_thresholds(path: Path, /, **overrides: Any) -> None:
         "min_dense": 0.50,
         "min_dense_alone": 0.55,
         "min_coverage": 0.20,
-        "min_lexical": 0.70,
         "min_coverage_high": 0.40,
         "min_sentence_overlap": 0.10,
     }
@@ -80,10 +78,34 @@ def test_a_strong_dense_hit_with_coverage_passes() -> None:
     assert verdict.reason == "dense+coverage"
 
 
-def test_a_strong_lexical_hit_with_high_coverage_passes() -> None:
+def test_a_chunk_containing_every_query_term_passes_on_coverage_alone() -> None:
+    """The exact-identifier case: `ERR-404` in a chunk is the answer whatever the embedding
+    thinks, so this branch asks for no similarity at all."""
     verdict = evaluate(signals(max_dense=0.10, lexical=0.90, token_coverage=0.60), thresholds())
     assert verdict.passed is True
-    assert verdict.reason == "lexical+coverage"
+    assert verdict.reason == "exact_terms"
+
+
+def test_the_retired_lexical_threshold_cannot_change_a_verdict() -> None:
+    """D58: `min_lexical` is gone, and this is what holds that honest.
+
+    `lexical_score` is bm25 divided by the best bm25 of the same query, so the top lexical hit
+    is exactly 1.0 for every query FTS matched at all -- 1.00 for 49 of the 50 eval questions,
+    answerable and unanswerable alike. The clause it guarded was therefore always true whenever
+    it could be, and the branch had a single live setting.
+
+    The equivalence is not an assumption: FTS indexes the same tokenizer output that
+    `token_coverage` counts, so `token_coverage > 0` implies FTS matched, which implies
+    `lexical_score == 1.0`. So the old rule and the new one are the same function, and this
+    test walks the whole input space that can distinguish them -- coverage below the bar with
+    every lexical value, which is the only region where the old clause could have refused.
+    """
+    for lexical in (0.0, 0.01, 0.5, 0.79, 0.8, 0.9, 1.0):
+        below = evaluate(signals(max_dense=0.0, lexical=lexical, token_coverage=0.49), thresholds())
+        assert below.passed is False, f"lexical={lexical} changed the refusal"
+    # And the removed field is genuinely gone from the contract, not merely unread.
+    assert "min_lexical" not in THRESHOLD_FIELDS
+    assert not hasattr(thresholds(), "min_lexical")
 
 
 def test_weak_signals_refuse() -> None:
@@ -130,9 +152,19 @@ def test_dense_only_is_reported_distinctly_from_dense_plus_coverage() -> None:
     assert alone.reason == "dense_only"
 
 
-def test_coverage_without_any_similarity_refuses() -> None:
+def test_a_chunk_containing_every_term_passes_even_at_zero_similarity() -> None:
+    """The exact-identifier case the third branch exists for: `ERR-404` in a chunk is the
+    answer whatever the embedding thinks, so demanding similarity here would be wrong.
+
+    This is the one behaviour change from deleting `min_lexical`, and it is a *widening*: the
+    old rule also required a lexical hit, so `coverage = 1.0` with no lexical hit used to
+    refuse. That combination is unreachable in production (see
+    `test_the_unreachable_state_is_unreachable_in_the_real_pipeline`), so the widening costs
+    nothing and the rule is now honest about what it reads.
+    """
     verdict = evaluate(signals(max_dense=0.05, lexical=0.0, token_coverage=1.0), thresholds())
-    assert verdict.passed is False
+    assert verdict.passed is True
+    assert verdict.reason == "exact_terms"
 
 
 def test_no_candidates_cannot_pass_however_good_the_signals_look() -> None:
@@ -144,25 +176,26 @@ def test_no_candidates_cannot_pass_however_good_the_signals_look() -> None:
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "expected"),
+    ("bar", "signal", "expected"),
     [
-        ("max_dense", 0.60, True),  # exactly at min_dense: inclusive
-        ("max_dense", 0.59, False),
-        ("lexical", 0.80, True),
-        ("lexical", 0.79, False),
+        ("min_dense", 0.60, True),  # exactly at min_dense: inclusive
+        ("min_dense", 0.59, False),
+        ("min_dense_alone", 0.70, True),  # exactly at min_dense_alone: inclusive
+        ("min_dense_alone", 0.69, False),
     ],
 )
-def test_similarity_thresholds_are_inclusive(field: str, value: float, expected: bool) -> None:
-    # The arm not under test is pinned below its own threshold, otherwise the other branch
-    # would pass regardless and the boundary being tested would prove nothing.
-    overrides: dict[str, Any] = {
-        "max_dense": value if field == "max_dense" else 0.0,
-        "lexical": value if field == "lexical" else 0.0,
-        "token_coverage": 0.60,
-    }
-    # min_dense_alone is pinned above too: the uncorroborated dense branch would otherwise
-    # pass these regardless, and the boundary under test would prove nothing.
-    assert evaluate(signals(**overrides), thresholds(min_dense_alone=1.0)).passed is expected
+def test_the_dense_bars_are_inclusive(bar: str, signal: float, expected: bool) -> None:
+    """Both dense bars are inclusive, and each is tested with the other pinned out of reach.
+
+    The bar stays at its nominal value while the *signal* moves, or the boundary would be tested
+    against itself. Coverage 0.40 clears `min_coverage` (0.30) and misses `min_coverage_high`
+    (0.50), and the other dense bar is pinned to 0.99 — so the only branch that can admit is
+    the one under test.
+    """
+    other = "min_dense_alone" if bar == "min_dense" else "min_dense"
+    point = thresholds(**{bar: 0.60 if bar == "min_dense" else 0.70, other: 0.99})
+    verdict = evaluate(signals(max_dense=signal, lexical=0.0, token_coverage=0.40), point)
+    assert verdict.passed is expected
 
 
 @pytest.mark.parametrize(
@@ -170,9 +203,9 @@ def test_similarity_thresholds_are_inclusive(field: str, value: float, expected:
     [
         (0.30, 0.99, True),  # exactly min_coverage: inclusive
         (0.29, 0.99, False),
-        (0.50, 0.10, True),  # exactly min_coverage_high on the lexical branch
+        (0.50, 0.10, True),  # exactly min_coverage_high on the exact-terms branch
         (0.49, 0.10, False),
-        (0.45, 0.10, False),  # between the two: the lexical branch is stricter
+        (0.45, 0.10, False),  # between the two: the exact-terms branch is stricter
     ],
 )
 def test_coverage_thresholds_are_inclusive_and_branch_specific(
@@ -186,12 +219,12 @@ def test_coverage_thresholds_are_inclusive_and_branch_specific(
 
 
 def test_the_two_branches_are_not_redundant() -> None:
-    """Coverage between the two bars passes on dense and fails on lexical only."""
+    """Coverage between the two bars passes on dense and fails on exact-terms only."""
     t = thresholds()
     mid = (t.min_coverage + t.min_coverage_high) / 2
     on_dense = evaluate(signals(max_dense=0.99, lexical=0.0, token_coverage=mid), t)
-    on_lexical = evaluate(signals(max_dense=0.0, lexical=0.99, token_coverage=mid), t)
-    assert on_dense.passed is True and on_lexical.passed is False
+    on_exact = evaluate(signals(max_dense=0.0, lexical=0.99, token_coverage=mid), t)
+    assert on_dense.passed is True and on_exact.passed is False
 
 
 # ---------------------------------------------------------------- the report

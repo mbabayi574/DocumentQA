@@ -100,11 +100,6 @@ UNANSWERABLE = ("unanswerable_near", "unanswerable_off")
 DENSE_GRID = tuple(round(0.02 * i, 2) for i in range(15, 36))  # 0.30 .. 0.70
 COVERAGE_GRID = tuple(round(0.05 * i, 2) for i in range(0, 17))  # 0.00 .. 0.80
 COVERAGE_HIGH_GRID = tuple(round(0.05 * i, 2) for i in range(0, 21))  # 0.00 .. 1.00
-#: `lexical_score` is bm25 divided by the best bm25 of the same query, so the top hit is
-#: exactly 1.0 for every query FTS matched at all — the signal saturates and `min_lexical`
-#: cannot discriminate (D58). Three values are enough to demonstrate that on real data, and
-#: searching a dead axis harder would only look like rigour.
-LEXICAL_GRID = (0.5, 0.8, 1.0)
 
 
 # ------------------------------------------------------------------ the dataset
@@ -465,22 +460,20 @@ def grid_search(
                 for min_coverage_high in COVERAGE_HIGH_GRID:
                     if min_coverage_high < min_coverage:
                         continue
-                    for min_lexical in LEXICAL_GRID:
-                        point = Thresholds(
-                            min_dense=min_dense,
-                            min_dense_alone=min_dense_alone,
-                            min_coverage=min_coverage,
-                            min_lexical=min_lexical,
-                            min_coverage_high=min_coverage_high,
-                            min_sentence_overlap=min_sentence_overlap,
-                            version=1,
-                            calibrated=False,
-                            model_id=model_id,
-                        )
-                        tested += 1
-                        if any(evaluate(o.signals, point).passed for o in unanswerable):
-                            continue
-                        feasible.append((point, _verdict_metrics(rows, point, label="dev")))
+                    point = Thresholds(
+                        min_dense=min_dense,
+                        min_dense_alone=min_dense_alone,
+                        min_coverage=min_coverage,
+                        min_coverage_high=min_coverage_high,
+                        min_sentence_overlap=min_sentence_overlap,
+                        version=1,
+                        calibrated=False,
+                        model_id=model_id,
+                    )
+                    tested += 1
+                    if any(evaluate(o.signals, point).passed for o in unanswerable):
+                        continue
+                    feasible.append((point, _verdict_metrics(rows, point, label="dev")))
     return feasible, tested
 
 
@@ -604,11 +597,29 @@ def _percentile(values: Sequence[float], fraction: float) -> float:
     return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
 
 
+def current_version(path: Path) -> int:
+    """The version already on disk, or 0. A new calibration must bump it.
+
+    Derived from the file rather than from the grid, because the grid builds its candidate
+    points at ``version=1`` -- so hard-coding ``+1`` off a grid point wrote ``2`` on every run
+    forever, and a changed rule shipped under the version number of the rule it replaced.
+    """
+    try:
+        return int(json.loads(path.read_text(encoding="utf-8")).get("version", 0))
+    except (OSError, ValueError, TypeError):
+        return 0
+
+
 def thresholds_payload(
-    thresholds: Thresholds, *, dataset_size: int, balance: dict[str, int], dev: Metrics
+    thresholds: Thresholds,
+    *,
+    dataset_size: int,
+    balance: dict[str, int],
+    dev: Metrics,
+    previous_version: int = 0,
 ) -> dict[str, Any]:
     return {
-        "version": thresholds.version + 1,
+        "version": previous_version + 1,
         "model_id": thresholds.model_id,
         "calibrated": True,
         **{name: getattr(thresholds, name) for name in THRESHOLD_FIELDS},
@@ -630,11 +641,11 @@ def thresholds_payload(
             f"{dataset_size} questions over six documents, so one question is worth up to "
             "0.05 recall and a single flipped answer moves a rate by a quarter. These are "
             "coarse operating points, not constants. Keyed on model_id: a calibrated file "
-            "for another model is a hard error, never reused (D42, D51). NOTE ON "
-            "min_lexical: it is 1.0 because `lexical_score` is bm25 divided by the best "
-            "bm25 of the same query, so the top hit is exactly 1.0 for every query FTS "
-            "matched at all. The parameter is saturated and carries no information; the "
-            "branch it guards is decided by min_coverage_high alone (D58)."
+            "for another model is a hard error, never reused (D42, D51). `min_lexical` was "
+            "removed in P10: `lexical_score` is bm25 divided by the best bm25 of the same "
+            "query, so the top hit is exactly 1.0 for every query FTS matched, and the "
+            "parameter could not discriminate (D58). `min_coverage_high` alone decides that "
+            "branch, and a file still carrying the retired key loads unchanged."
         ),
     }
 
@@ -976,6 +987,7 @@ async def run(
                     for category in (*ANSWERABLE, *UNANSWERABLE)
                 },
                 dev=calibration.dev,
+                previous_version=current_version(settings.thresholds_path),
             )
             if calibrate:
                 settings.thresholds_path.write_text(

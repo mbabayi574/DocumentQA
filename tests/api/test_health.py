@@ -33,7 +33,6 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
                 "min_dense": 0.05,
                 "min_dense_alone": 0.99,
                 "min_coverage": 0.70,
-                "min_lexical": 0.50,
                 "min_coverage_high": 0.90,
                 "min_sentence_overlap": 0.15,
             }
