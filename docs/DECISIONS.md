@@ -536,14 +536,34 @@ because it looks like a finding.
 confirmed by measurement rather than assumption. The 60-second burst cap and the 100/min
 limiter leave headroom against a measured 31 req/min of real ingest work.
 
-**The largest inefficiency found is chunk size, not batching.** At 500-char chunks the
-measured cost is 66 ms per 1 000 chars; at 2 000-char items it is ~11 ms per 1 000 chars —
-roughly **6x cheaper per character**. `CHARS_PER_TOKEN = 1.5` sizes chunks for the
-densest measured text (tables), so the real corpus averages 498 chars against a 40 949-char
-budget. Raising it trades throughput against retrieval precision, which is a P9
-experiment on the proper dataset, not a change to make on a 12-question spot-check. The
-harness for that experiment now exists: `scripts/measure_provider.py` caches fixture
-vectors on disk, so a chunk-size or weight sweep costs no API calls after the first run.
+**The largest inefficiency found is chunk size, not batching.** Cost per character falls
+steeply as items get longer. From the item-length sweep, all at 16 items per request so
+the batch size is not a confound:
+
+| chars/item | median s | chars/s | ms per 1 000 chars |
+|---|---|---|---|
+| 200 | 0.666 | 4 805 | 208.1 |
+| 500 | 0.840 | 9 524 | 105.0 |
+| 1 000 | 1.058 | 15 123 | 66.1 |
+| 2 000 | 1.148 | 27 875 | **35.9** |
+| 4 000 | 1.357 | 47 163 | 21.2 |
+| 8 000 | 1.410 | 90 780 | **11.0** |
+
+So 500 → 2 000 chars is **2.9x** cheaper per character, and 500 → 8 000 is **9.5x**.
+`CHARS_PER_TOKEN = 1.5` sizes chunks for the densest measured text (tables), so the real
+corpus averages 498 chars against a 40 949-char budget. Raising it trades throughput
+against retrieval precision, which is a P9 experiment on the proper dataset, not a change
+to make on a 12-question spot-check. The harness for that experiment now exists:
+`scripts/measure_provider.py` caches fixture vectors on disk, so a chunk-size or weight
+sweep costs no API calls after the first run.
+
+> **Correction.** An earlier version of this entry claimed "~11 ms per 1 000 chars at
+> 2 000-char items, roughly 6x cheaper". Both numbers were wrong: 11 ms is the **8 000**-char
+> row, and the 2 000-char row is 35.9 ms, i.e. 2.9x rather than 6x. The error came from
+> reading the 8 000-char row off the 2 000-char comparison. A 2-item spot-check caught
+> nothing here; recomputing from the raw sweep did. The lesson generalises: when a
+> measurement is quoted, recompute the derived ratio from the raw table rather than
+> carrying a number forward.
 
 ## D31 — a fixture the plan called committed was git-ignored (D31)
 
