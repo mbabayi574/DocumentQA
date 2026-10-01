@@ -47,11 +47,11 @@
 12. **Keep chat output small.** Never dump embeddings, whole documents, or whole files.
 
 **Order.** One phase per session, one commit per logical change, in dependency order.
-P6 is the highest risk and gets the most attention.
+P6 was the highest risk and is done; P7 is next.
 
 ```text
 P0 ✓ scaffold    P1 ✓ text     P2 ✓ parsing   P3 ✓ chunking   P4 ✓ embeddings   P5 ✓ storage
-→ P6 ingestion [highest risk] → P7 retrieval+gate+answer → P8 API
+→ P6 ✓ ingestion → P7 retrieval+gate+answer → P8 API
 → P9 eval + calibration → P10 hardening → P11 refactor + README
 ```
 
@@ -349,6 +349,7 @@ Gates passed; `docs/DECISIONS.md` has the evidence. These constraints must not r
 | **P3** chunking | contiguous slices only, deterministic, heading-aware, sentence packing + a mechanical cap pass | `CHARS_PER_TOKEN=1.5` is the **densest** measured case (tables 1.45, prose 4.14), not the average; the second cap pass exists for content with no sentence terminators at all |
 | **P4** embeddings | discovery, dimension probe, three-bound batching, token bucket, bounded retry, caching | `index` trusted only if a permutation (D21); the per-item cap is enforced locally, before any request (D22); scrub provider messages before they reach an exception (D23) |
 | **P5** storage | schema, repository, FTS5 lexical, Chroma adapter, reconcile + `rebuild`, single-owner lock | explicit `BEGIN`/`COMMIT` (D25); `ensure_collection()` takes no args (D27); `rebuild` accepts a tripwire embedder it never calls, so "zero API calls" is asserted rather than claimed (D28) |
+| **P6** ingestion | `diff.py` multiset diff, `service.py` add/replace/delete/reconcile, all 12 gate tests | embedding runs **outside** the write lock and before any version exists, so an embed failure costs nothing (D33); VERIFY refuses a partial vector write; a failed version **keeps** its row as `failed` while a superseded one is fully purged (D35); a best-effort cleanup step needs its own assertions, because no correctness test can fail when it is deleted (D34); `embed_requests` is a delta and `reconcile` returns the plan it **found** (D36) |
 
 ---
 
@@ -356,7 +357,7 @@ Gates passed; `docs/DECISIONS.md` has the evidence. These constraints must not r
 
 Run one per session. Do not start a phase before the previous Gate passed.
 
-### P6 — Ingestion and change management `[highest risk]`
+### P6 — Ingestion and change management `[highest risk]` — **DONE, see §8**
 
 ```text
 validate → parse → chunk → content/parsed hash → unchanged? ──yes──► 200 "unchanged" (0 embed calls)
@@ -700,8 +701,8 @@ Reviewer questions, each answered by a named test:
 ## 12. Open questions for the human
 
 1. **Fusion weights** — §2 measured 0.9/0.1 ahead of the 0.7/0.3 default, but at 12
-   questions that is not decisive. Confirm the plan should wait for P9's dev split rather
-   than adopt the higher value now.
+   questions that is not decisive. Confirm P9's dev split should decide it rather than
+   adopting the higher value now.
 2. **Chunk size** — raising `CHUNK_TARGET_TOKENS` toward 2 000-char chunks is worth ~2.9×
    throughput per character (9.5× at 8 000). Confirm it stays a P9 experiment, since it
    trades against retrieval precision.

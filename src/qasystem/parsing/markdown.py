@@ -2,8 +2,11 @@
 
 Uses ``markdown-it-py`` token line maps rather than regexes, so ATX and Setext
 headings both work and a ``#`` inside a fenced code block is never a heading.
-The document text is kept byte-for-byte: headings, fences and odd spacing
-survive, because citations quote it.
+The document text is kept verbatim apart from newlines: headings, fences and odd
+spacing survive, because citations quote it. ``\r\n`` becomes ``\n`` so that a
+Windows-authored file produces the same source text, the same line numbers, and the
+same chunks as its LF twin -- otherwise a re-upload with only the line endings changed
+would be published as a new version (D32).
 """
 
 from __future__ import annotations
@@ -28,7 +31,9 @@ class MarkdownParser:
         self._md = MarkdownIt("commonmark")
 
     def parse(self, data: bytes, filename: str) -> ParsedDocument:
-        text = data.decode("utf-8-sig")
+        # Normalize newlines before anything measures a line, so a CRLF file and its LF
+        # twin are indistinguishable downstream. Decoding as utf-8-sig also drops a BOM.
+        text = data.decode("utf-8-sig").replace("\r\n", "\n")
         starts = line_starts(text)
         title = stem(filename)
         sections, first_heading = _walk(self._md.parse(text), text, starts, title)

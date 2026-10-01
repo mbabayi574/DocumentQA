@@ -99,3 +99,23 @@ def test_persian_markdown_and_zwnj_survive() -> None:
 def test_empty_markdown_raises() -> None:
     with pytest.raises(EmptyDocumentError):
         parse("   \n\n")
+
+
+def test_crlf_and_lf_produce_identical_source_text() -> None:
+    """A Windows-authored file must not become a new version of the same document (D32).
+
+    Found by P6's I4 test: a CRLF re-upload parsed to different text, so it published a
+    second version whose only difference was the line endings.
+    """
+    parser = MarkdownParser()
+    lf = parser.parse(b"# Guide\n\nBody line.\n", "g.md")
+    crlf = parser.parse(b"# Guide\r\n\r\nBody line.\r\n", "g.md")
+    assert crlf.text == lf.text
+    assert crlf.text == "# Guide\n\nBody line.\n"
+    assert [s.line_start for s in crlf.sections] == [s.line_start for s in lf.sections]
+    assert [s.section_path for s in crlf.sections] == [s.section_path for s in lf.sections]
+
+
+def test_a_bom_does_not_reach_the_source_text() -> None:
+    parser = MarkdownParser()
+    assert parser.parse(b"\xef\xbb\xbf# Guide\n\nBody.\n", "g.md").text == "# Guide\n\nBody.\n"

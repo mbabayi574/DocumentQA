@@ -366,6 +366,23 @@ class SqliteStore:
                 (doc_id, version),
             )
 
+    def purge_version_chunks(self, doc_id: str, version: int) -> None:
+        """Drop a version's chunk and FTS rows but keep the version row.
+
+        Used for a version that died before publish: the rows are useless, but the row
+        recording that this version number was allocated and failed is the audit trail.
+        ``ingest_log`` carries the error code; this carries the identity.
+        """
+        with self._txn():
+            self._db.execute(
+                "DELETE FROM chunks_fts WHERE chunk_id IN "
+                "(SELECT chunk_id FROM chunks WHERE doc_id = ? AND doc_version = ?)",
+                (doc_id, version),
+            )
+            self._db.execute(
+                "DELETE FROM chunks WHERE doc_id = ? AND doc_version = ?", (doc_id, version)
+            )
+
     def version_state(self, doc_id: str, version: int) -> str | None:
         """``staging``/``published``/``superseded``/``failed``, or ``None`` if absent."""
         row = self._one(
@@ -471,6 +488,33 @@ class SqliteStore:
             "SELECT chunk_id, doc_id, doc_version, ordinal, embed_input_hash FROM chunks "
             "ORDER BY chunk_id"
         )
+
+    def staging_versions(self) -> list[dict[str, Any]]:
+        """Versions left in ``staging``: an interrupted ingest that reconcile must fail (P6)."""
+        return self._rows(
+            "SELECT doc_id, version, created_at FROM document_versions "
+            "WHERE state = 'staging' ORDER BY doc_id, version"
+        )
+
+    def vector_ids_for(self, doc_id: str, version: int) -> list[str]:
+        """The Chroma ids one version owns, so cleanup needs no extra bookkeeping."""
+        return [
+            row["chunk_id"]
+            for row in self._rows(
+                "SELECT chunk_id FROM chunks WHERE doc_id = ? AND doc_version = ? ORDER BY ordinal",
+                (doc_id, version),
+            )
+        ]
+
+    def vector_ids_for_document(self, doc_id: str) -> list[str]:
+        """Every Chroma id a document owns, across all its versions."""
+        return [
+            row["chunk_id"]
+            for row in self._rows(
+                "SELECT chunk_id FROM chunks WHERE doc_id = ? ORDER BY doc_version, ordinal",
+                (doc_id,),
+            )
+        ]
 
     def eligible_chunks_fts(self, match_expression: str, limit: int) -> list[dict[str, Any]]:
         """Top ``limit`` FTS rows by ``bm25``, joined to ``eligible_chunks``.

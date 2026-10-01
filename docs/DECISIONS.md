@@ -592,3 +592,121 @@ run as part of `make check` from here on, not saved for the last phase.
 chunks it dominates the index and costs R@1. Committing it makes that visible to anyone
 who runs the eval, which is the correct outcome — the imbalance is a property of the
 corpus, and hiding the file would have hidden the problem.
+
+---
+
+## D32 — the Markdown parser did not normalize CRLF, which broke I4 (D32)
+
+P6's I4 test — "bytes yielding identical parsed text must return `unchanged` with zero
+embedding requests" — had no honest way to be written, because the Markdown parser kept
+`\r\n` verbatim in `source_text`. The TXT parser has normalized newlines since P2;
+Markdown did not.
+
+Consequence: re-uploading the same document from a Windows editor, or through anything
+that rewrites line endings, published a **new version** whose only difference was invisible
+whitespace. Every citation, every chunk hash, every embedding cache key changed. That is
+exactly the "outdated content" churn I1–I2 exist to prevent, manufactured by a line ending.
+
+Fixed at the right place — one `.replace("\r\n", "\n")` in `MarkdownParser.parse`, before
+anything measures a line, so offsets, line numbers, and chunks all agree. `utf-8-sig`
+already dropped the BOM.
+
+> Found by a test written for a different reason. The I4 test was supposed to pin
+> `parsed_hash`; it could not even be written, and the reason it could not be written was
+> the bug. A test that is hard to write is often reporting that the code is wrong.
+
+## D33 — embedding happens outside the write lock, and before any version exists (D33)
+
+The embedded string is `"{title} > {breadcrumb}\n\n{chunk text}"` and contains **no version
+number**. So the network-bound part of ingestion does not need the lock, does not need a
+version, and cannot be invalidated by a concurrent ingestion of the same document.
+
+Order is therefore: parse → chunk → hash → **embed** → *lock* → re-check unchanged →
+allocate → stage → verify → publish → clean up.
+
+Two properties fall out:
+
+- Two documents ingest concurrently without serialising on each other's network calls.
+- A failure during embedding costs **nothing**: no version number is allocated, no row is
+  written. `test_7b` asserts exactly that, and it is the reason the `ingest_log` row for
+  that failure shows `new_version = None`.
+
+The unchanged check is repeated *inside* the lock on purpose. A concurrent ingestion may
+have published this exact text while we were embedding; the wasted embedding is our loss,
+and returning `unchanged` is the correct answer rather than publishing a duplicate version.
+
+**Mutation-verified:** swapping `parsed_hash` for `content_hash` in that check fails
+`test_2b`; the difference between the two is precisely D32.
+
+## D34 — best-effort cleanup needs its own assertions, not just a correctness one (D34)
+
+I2 is satisfied by the view: stale and deleted rows are unreachable *regardless* of whether
+cleanup ran. That is the point — but it means **every test that only checks retrievability
+passes even if cleanup is deleted outright.**
+
+A mutation replacing `self._purge_superseded(...)` with `pass` left all 36 P6 tests green.
+Superseded chunk rows, superseded FTS rows and superseded vectors would accumulate
+forever, and nothing would notice.
+
+`test_4` now asserts the reclamation directly: v1's chunk rows gone, its version row gone,
+no `:v1:` vector left, and `chunks_removed` recorded in the log. Re-running the mutation
+fails it.
+
+> Generalisable, and worth stating once: **when a step is deliberately non-load-bearing,
+> the correctness tests cannot be the only ones covering it.** A best-effort step needs a
+> test that fails when the step is removed, or "best-effort" quietly becomes "never".
+
+## D35 — a failed version keeps its row; a successful one is fully purged (D35)
+
+plan.md P6 rule 4 says a failure before publish leaves the version `failed` with staged rows
+removed. The first implementation did `purge_version`, which deletes the version row too —
+so the state was never observable and `version_state()` returned `None`.
+
+Two different purges now exist, and the difference is deliberate:
+
+| Situation | Rows | Version row | Why |
+|---|---|---|---|
+| Superseded or deleted | chunks + FTS + version | gone | the text must not survive |
+| Failed before publish | chunks + FTS | **kept, `state='failed'`** | the version number is spent and the audit trail matters |
+
+`ingest_log` already carries the error code and timings; the retained row carries the
+identity of the version number that was consumed, which is what stops anyone wondering
+whether v2 was ever used. Mutation-verified: swapping `purge_version_chunks` for
+`purge_version` fails `test_9`.
+
+## D36 — `embed_requests` is a delta, and `reconcile` returns the plan it found (D36)
+
+Two small reporting decisions that a test caught by asserting the wrong thing first.
+
+**`embed_requests` is a delta.** The counter lives on `CachingEmbedder` and is cumulative,
+so a second ingestion reported the *lifetime* total. A reorder-only edit appeared to cost
+one embedding call when it cost none — and the test asserting zero was failing for a reason
+that had nothing to do with the code. `IngestResult.embed_requests` is now
+`after - before`, so the number means "what this call cost", which is the only useful
+reading for a rate-limited provider.
+
+**`reconcile()` returns the plan as found, not as repaired.** Recomputing after the repairs
+always looks clean, which would make the return value useless for the thing a caller wants
+it for: reporting what drifted. `test_9b` asserts `orphaned == ("ghost:v1:0",)` and
+`in_sync is False` on the call that fixed it, then asserts a second `reconcile()` is clean.
+
+**Rule 8 is now directly tested** (`test_9c`): a vector for a document SQLite has never
+heard of, and a vector claiming a version SQLite never allocated. Both are deleted from the
+index, and neither causes a document row or a version to be invented. A mutation that
+inserted a `documents` row per orphan fails `test_9b` and `test_9c`.
+
+## P6 mutation results
+
+| # | Mutation | Test that caught it |
+|---|---|---|
+| M1 | skip the post-upsert VERIFY step | `test_8b_...silently_loses_vectors...` |
+| M2 | unchanged check on `content_hash` not `parsed_hash` | `test_2b_...identical_parsed_text...` |
+| M3 | let a cleanup failure become fatal | `test_5_...chroma_cleanup_fails` |
+| M4 | drop `current_version = NULL` from delete | `test_5b_...purges_chroma_when_cleanup_succeeds` |
+| M5 | fully purge a failed version | `test_9_...left_staging_is_failed_on_reconcile` |
+| M6 | skip superseded cleanup entirely | `test_4_...old_text_is_unretrievable` |
+| M7 | diff with set instead of multiset semantics | 2 tests in `test_ingest_diff.py` |
+| M8 | `reconcile` invents documents from Chroma | `test_9b`, `test_9c` |
+
+M4 and M6 were both **green before** their tests existed. Neither would ever have been
+caught by a test written only from the plan's list of required behaviours.

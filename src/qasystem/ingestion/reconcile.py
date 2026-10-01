@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from qasystem.domain.models import VectorItem
-from qasystem.storage.chroma_store import PAGE_SIZE, ChromaStore
+from qasystem.domain.ports import VectorStore
+from qasystem.storage.chroma_store import PAGE_SIZE
 from qasystem.storage.sqlite_store import SqliteStore
 
 
@@ -44,7 +45,7 @@ class ReconcilePlan:
         return not self.missing and not self.orphaned
 
 
-def plan_reconcile(store: SqliteStore, vectors: ChromaStore) -> ReconcilePlan:
+def plan_reconcile(store: SqliteStore, vectors: VectorStore) -> ReconcilePlan:
     """Read-only comparison. Never mutates either side."""
     expected = set(store.expected_vector_ids())
     actual = set(vectors.list_ids())
@@ -57,7 +58,7 @@ def plan_reconcile(store: SqliteStore, vectors: ChromaStore) -> ReconcilePlan:
 
 def rebuild(
     store: SqliteStore,
-    vectors: ChromaStore,
+    vectors: VectorStore,
     model_id: str,
     *,
     embedder: EmbedderRef | None = None,

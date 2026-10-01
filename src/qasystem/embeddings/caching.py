@@ -51,6 +51,9 @@ class CachingEmbedder:
         self._cache = cache
         self._query_lru_size = query_lru_size
         self._query_lru: MutableMapping[str, list[float]] = {}
+        # Requests actually sent upstream, so ingest_log.embed_requests is measured
+        # rather than inferred from a diff.
+        self.requests = 0
 
     @property
     def model_id(self) -> str:
@@ -89,6 +92,7 @@ class CachingEmbedder:
         return vector
 
     async def _embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.requests += 1
         return await self._inner.embed(texts)
 
     def _get(self, model_id: str, hashes: Sequence[str]) -> dict[str, list[float]]:
