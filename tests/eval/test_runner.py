@@ -167,7 +167,9 @@ def _cited(
     # the position and every case collapses to one answer.
     padded = [("other.pdf", "filler")] * (max((p for _, p in hits), default=0))
     candidates = tuple(
-        type("C", (), {"source_name": name, "text": "a 0.0.0.0:8443 chunk", "chunk_id": f"{i}"})()
+        type(
+            "C", (), {"source_name": name, "text": "the port is 0.0.0.0:8443", "chunk_id": f"{i}"}
+        )()
         for i, (name, _) in enumerate(padded + list(hits) + [("other.pdf", "filler")] * TOP_K)
     )
     citations = tuple(
@@ -192,11 +194,15 @@ def _cited(
 GOLD = Gold("handbook.md", "0.0.0.0:8443")
 QUESTION = Case("w", "what port", "answerable_en", "dev", (GOLD,))
 TOP_K = 5
+#: The fixture's question is "what port" and its chunk reads "the port is ...", so the
+#: answerer's own overlap for the gold sentence is 1.0. Asserted rather than left implicit, so a
+#: change to the overlap formula shows up here instead of silently shifting every cause test.
+GOLD_OVERLAP = 1.0
 
 
 def test_a_wrong_document_is_reported_as_a_retrieval_failure() -> None:
     observation = _cited(QUESTION, [("runbook.txt", "no answer here")], [("handbook.md", 2)])
-    assert mis_cited(observation, TOP_K) == [("0.0.0.0:8443", "retrieval")]
+    assert mis_cited(observation, TOP_K) == [("0.0.0.0:8443", "retrieval", GOLD_OVERLAP)]
 
 
 def test_a_gold_chunk_below_top_k_is_reported_as_truncation_not_a_retrieval_failure() -> None:
@@ -205,14 +211,35 @@ def test_a_gold_chunk_below_top_k_is_reported_as_truncation_not_a_retrieval_fail
     observation = _cited(
         QUESTION, [("handbook.md", "wrong chunk of the right document")], [("handbook.md", 9)]
     )
-    assert mis_cited(observation, TOP_K) == [("0.0.0.0:8443", "truncation")]
+    assert mis_cited(observation, TOP_K) == [("0.0.0.0:8443", "truncation", GOLD_OVERLAP)]
 
 
 def test_a_gold_chunk_inside_top_k_is_reported_as_an_answerer_failure() -> None:
     observation = _cited(
         QUESTION, [("handbook.md", "wrong chunk of the right document")], [("handbook.md", 2)]
     )
-    assert mis_cited(observation, TOP_K) == [("0.0.0.0:8443", "answerer")]
+    assert mis_cited(observation, TOP_K) == [("0.0.0.0:8443", "answerer", GOLD_OVERLAP)]
+
+
+def test_a_gold_sentence_the_answerer_would_drop_is_reported_with_its_score() -> None:
+    """The number that says whether a case has one blocker or two.
+
+    P10's `top_k` sweep turned up a case labelled "truncation" that raising `top_k` did not
+    fix, because its sentence was also below the overlap bar. The label was not wrong about the
+    mechanism at `top_k=5`; it was *incomplete*, and this is what makes the second blocker
+    visible: the score is the answerer's own, computed with the answerer's formula.
+    """
+    # Same question and gold, but with the sentence sharing no word with the question. That is
+    # `fa02`'s shape: a Markdown code fence holding a command, asked about in words.
+    for question, expected in (("what port", 1.0), ("which host", 0.0)):
+        observation = _cited(
+            replace(QUESTION, question=question),
+            [("handbook.md", "an unrelated slice")],
+            [("handbook.md", 2)],
+        )
+        phrase, cause, overlap = mis_cited(observation, TOP_K)[0]
+        assert (phrase, cause) == ("0.0.0.0:8443", "answerer")
+        assert overlap == expected, f"{question!r} scored {overlap}"
 
 
 def test_gold_that_is_quoted_is_not_reported_at_all() -> None:

@@ -34,7 +34,7 @@ column requirement 4 of jobTask.md is actually about (D60).
 
 ## Latency
 
-- end to end, each question asked once, cold: **P50 328 ms, P95 455 ms**, max 521 ms
+- end to end, each question asked once, cold: **P50 341 ms, P95 1503 ms**, max 1762 ms
 - the same questions again with the query cache warm, so no network: **P50 10 ms**, P95 11 ms
 
 The tail is the embedding provider's, not this system's (D54). Everything here builds
@@ -88,27 +88,38 @@ and a caller who cannot read the cited language has no way to notice at all (D60
 
 | case | split | question | cited | gold not quoted (cause) |
 |---|---|---|---|---|
-| `fa02` | dev | گیت‌وری با چه دستوری نصب می‌شود؟ | deploy-guide.md | `auroractl install --channel stable` (truncation) |
+| `fa02` | dev | گیت‌وری با چه دستوری نصب می‌شود؟ | deploy-guide.md | `auroractl install --channel stable` (truncation, sentence overlap 0.000) |
 | `x01` | dev | What is the exact path of the file that holds the gateway's configuration? | handbook.md | `/etc/aurora/gateway.toml` (retrieval) |
-| `m01` | test | What port does the gateway listen on, and what sustained throughput does one tenant get? | handbook.md, limits.pdf | `0.0.0.0:8443` (answerer) |
-| `m05` | test | What are the installation prerequisites and the default listen port? | handbook.md, limits.pdf | `۴ هسته` (retrieval) |
+| `m01` | test | What port does the gateway listen on, and what sustained throughput does one tenant get? | handbook.md, limits.pdf | `0.0.0.0:8443` (answerer, sentence overlap 0.067) |
+| `m05` | test | What are the installation prerequisites and the default listen port? | handbook.md, limits.pdf | `۴ هسته` (retrieval, sentence overlap 0.000) |
 
-Three causes, and the `kind` is the useful part — they need different fixes:
+Three causes, and the `kind` is the useful part — they need different fixes. The
+sentence overlap is the answerer's own score for the sentence holding the fact, so
+whether a case has a *second* blocker is visible rather than assumed.
 
 * **retrieval** — the citation names a document that does not hold the answer. This
   is D55's mechanism on a corpus where every question has a known answer: the dense
   arm finds the answer (R@3 is 0.95) and the lexical arm's incidental word matches
   put a same-language document in front of it.
 * **truncation** — the right document *is* cited and the gold chunk is in the
-  candidate window, but below `top_k`, so the answerer never saw it. The fix is
-  `TOP_K`; the cost is more sentences to read.
+  candidate window, but below `top_k`, so the answerer never saw it. The obvious
+  fix is `TOP_K`, and P10 measured it: `gold quoted` moves 0.897 -> 0.923 between
+  `top_k` 5 and 15 for +19% answer length, and the truncation case *converts* to an
+  answerer case rather than being fixed. `TOP_K` is therefore left at 5.
 * **answerer** — the gold chunk is inside `top_k` and the sentence carrying the fact
-  was dropped by `min_sentence_overlap`. Measured on `m01`: the sentence holding
-  `0.0.0.0:8443` scores **0.067** against a 0.15 bar, while the sentence beside it —
-  which talks *about* the port without the number — scores **0.153** and is quoted
-  instead. Word overlap cannot connect "what port" to a literal, so this is a
-  limitation of the signal rather than a tuning miss; lowering the bar to reach it
-  would pad every answer with unrelated sentences.
+  was dropped by `min_sentence_overlap`. Every non-retrieval case above is this one
+  defect, and it is a limitation of the signal rather than a tuning miss. `m01` asks
+  "what port" and the sentence holding `0.0.0.0:8443` scores **0.067** against a
+  0.15 bar, while the sentence beside it — which talks *about* the port without
+  containing the number — scores **0.153** and is quoted instead. `fa02` asks
+  "which command" and
+  the gold sentence is a Markdown code fence at **0.000**: the command shares no word
+  with the question, and the word that connects them is in the section heading, not
+  the sentence. Word overlap cannot connect a question asked in words to an answer
+  given as a literal, and lowering the bar to reach these would pad every answer with
+  unrelated sentences, which §7.3 forbids. This is the one place a dense re-score of
+  candidate sentences would help — which is what `SENTENCE_RERANK` was for, and why
+  §9.4 measured it and found nothing to measure: there was no implementation.
 
 Neither is a false answer in §9.3's sense — every case here is an answerable
 question that the gate was right to admit. They are the residue that a false-answer

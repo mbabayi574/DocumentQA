@@ -312,8 +312,49 @@ HEADERS = (
 )
 
 
-def mis_cited(observation: Observation, top_k: int) -> list[tuple[str, str]]:
-    """``(gold phrase, cause)`` for gold the answer did not quote, with the cause measured.
+def gold_sentence_overlap(observation: Observation, gold: Gold) -> float | None:
+    """The answerer's own overlap score for the sentence carrying ``gold``, or ``None``.
+
+    This is what makes the cause labels trustworthy. P10's ``top_k`` sweep showed D60's
+    "truncation" label for ``fa02`` was incomplete: the gold chunk sat at window position 10,
+    so raising ``top_k`` put it in view -- and the sentence was *still* dropped, at overlap
+    **0.000**, because it is a Markdown code fence holding a command and the question is asked
+    in words. Two independent blockers, and removing one fixes nothing.
+
+    So every mis-cited case now carries the score that says whether its own cause is the
+    *only* blocker, measured with the answerer's formula rather than asserted.
+    """
+    from qasystem.answering.sentences import chunk_idf, query_terms
+    from qasystem.chunking.chunker import split_sentences
+    from qasystem.text.tokenize import tokenize
+
+    chunks = [
+        c
+        for c in observation.candidates
+        if c.source_name == gold.doc and gold.must_contain in c.text
+    ]
+    if not chunks:
+        return None
+    terms = query_terms(observation.case.question)
+    weights = chunk_idf([c.text for c in observation.candidates], terms)
+    scored = {t: weights.get(t, 1.0) for t in terms}
+    total = sum(scored.values())
+    if not total:
+        return 0.0
+    best = max(
+        (
+            sum(v for t, v in scored.items() if t in set(tokenize(sentence.text))) / total
+            for chunk in chunks
+            for sentence in split_sentences(chunk.text)
+            if gold.must_contain in sentence.text
+        ),
+        default=None,
+    )
+    return best
+
+
+def mis_cited(observation: Observation, top_k: int) -> list[tuple[str, str, float | None]]:
+    """``(gold phrase, cause, sentence overlap)`` for gold the answer did not quote.
 
     Three failures look identical in the output and none of them is a false answer in §9.3's
     sense, because the question *is* answerable and the gate was right to admit it:
@@ -333,10 +374,11 @@ def mis_cited(observation: Observation, top_k: int) -> list[tuple[str, str]]:
         return []
     cited = {citation.document for citation in observation.answer.citations}
     quoted = "\n".join(citation.excerpt for citation in observation.answer.citations)
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, float | None]] = []
     for gold in observation.case.gold:
         if gold.must_contain in quoted:
             continue
+        overlap = gold_sentence_overlap(observation, gold)
         if gold.doc not in cited:
             cause = "retrieval"
         else:
@@ -346,7 +388,7 @@ def mis_cited(observation: Observation, top_k: int) -> list[tuple[str, str]]:
                 if candidate.source_name == gold.doc and gold.must_contain in candidate.text
             ]
             cause = "answerer" if positions and positions[0] <= top_k else "truncation"
-        out.append((gold.must_contain, cause))
+        out.append((gold.must_contain, cause, overlap))
     return out
 
 
@@ -784,25 +826,39 @@ def render(
         add("| case | split | question | cited | gold not quoted (cause) |")
         add("|---|---|---|---|---|")
         for case_id, split, question, cited, missing in wrong:
-            cells = "; ".join(f"`{phrase}` ({cause})" for phrase, cause in missing)
+            cells = "; ".join(
+                f"`{phrase}` ({cause}{'' if score is None else f', sentence overlap {score:.3f}'})"
+                for phrase, cause, score in missing
+            )
             add(f"| `{case_id}` | {split} | {question} | {', '.join(sorted(cited))} | {cells} |")
         add("")
-        add("Three causes, and the `kind` is the useful part — they need different fixes:")
+        add("Three causes, and the `kind` is the useful part — they need different fixes. The")
+        add("sentence overlap is the answerer's own score for the sentence holding the fact, so")
+        add("whether a case has a *second* blocker is visible rather than assumed.")
         add("")
         add("* **retrieval** — the citation names a document that does not hold the answer. This")
         add("  is D55's mechanism on a corpus where every question has a known answer: the dense")
         add("  arm finds the answer (R@3 is 0.95) and the lexical arm's incidental word matches")
         add("  put a same-language document in front of it.")
         add("* **truncation** — the right document *is* cited and the gold chunk is in the")
-        add("  candidate window, but below `top_k`, so the answerer never saw it. The fix is")
-        add("  `TOP_K`; the cost is more sentences to read.")
+        add("  candidate window, but below `top_k`, so the answerer never saw it. The obvious")
+        add("  fix is `TOP_K`, and P10 measured it: `gold quoted` moves 0.897 -> 0.923 between")
+        add("  `top_k` 5 and 15 for +19% answer length, and the truncation case *converts* to an")
+        add("  answerer case rather than being fixed. `TOP_K` is therefore left at 5.")
         add("* **answerer** — the gold chunk is inside `top_k` and the sentence carrying the fact")
-        add("  was dropped by `min_sentence_overlap`. Measured on `m01`: the sentence holding")
-        add("  `0.0.0.0:8443` scores **0.067** against a 0.15 bar, while the sentence beside it —")
-        add("  which talks *about* the port without the number — scores **0.153** and is quoted")
-        add('  instead. Word overlap cannot connect "what port" to a literal, so this is a')
-        add("  limitation of the signal rather than a tuning miss; lowering the bar to reach it")
-        add("  would pad every answer with unrelated sentences.")
+        add("  was dropped by `min_sentence_overlap`. Every non-retrieval case above is this one")
+        add("  defect, and it is a limitation of the signal rather than a tuning miss. `m01` asks")
+        add('  "what port" and the sentence holding `0.0.0.0:8443` scores **0.067** against a')
+        add("  0.15 bar, while the sentence beside it — which talks *about* the port without")
+        add("  containing the number — scores **0.153** and is quoted instead. `fa02` asks")
+        add('  "which command" and')
+        add("  the gold sentence is a Markdown code fence at **0.000**: the command shares no word")
+        add("  with the question, and the word that connects them is in the section heading, not")
+        add("  the sentence. Word overlap cannot connect a question asked in words to an answer")
+        add("  given as a literal, and lowering the bar to reach these would pad every answer with")
+        add("  unrelated sentences, which §7.3 forbids. This is the one place a dense re-score of")
+        add("  candidate sentences would help — which is what `SENTENCE_RERANK` was for, and why")
+        add("  §9.4 measured it and found nothing to measure: there was no implementation.")
         add("")
         add("Neither is a false answer in §9.3's sense — every case here is an answerable")
         add("question that the gate was right to admit. They are the residue that a false-answer")

@@ -197,7 +197,7 @@ async def test_cross_lingual_answers_cite_the_wrong_language_document(graph: Ser
     wrong_document = [
         (o.case.id, phrase)
         for o in observations
-        for phrase, cause in mis_cited(o, graph.settings.top_k)
+        for phrase, cause, _overlap in mis_cited(o, graph.settings.top_k)
         if cause == "retrieval"
     ]
     assert wrong_document, (
