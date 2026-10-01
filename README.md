@@ -126,9 +126,17 @@ instead. No target number is set: the target is to remove the causes.
   P95 448 ms. The same queries with the embedding cached take P50 10 ms, so retrieval, fusion,
   gating and answer assembly together are ~3% of a query (D54, D63). Any P95 quoted without
   that qualification is measuring someone else's server.
-- **`min_lexical` is a threshold on a saturated signal and does nothing** (D58):
-  `lexical_score` is bm25 divided by the best bm25 of the same query, so the top hit is
-  exactly 1.0 for every query FTS matched. Recorded for removal in P10/P11.
+- **`min_lexical` was a threshold on a saturated signal and has been removed** (D67, D58):
+  `lexical_score` is bm25 divided by the best bm25 of the same query, so the top hit was exactly
+  1.0 for every query FTS matched — 1.00 for 49 of the 50 eval questions, answerable and
+  unanswerable alike. The gate's exact-terms branch is now decided by `min_coverage_high` alone,
+  which is provably the same rule, and the calibration's operating point is unchanged.
+- **Two remaining answers quote a document that does not contain the answer** (`gold quoted`
+  0.90 on all 50 questions). Both are the cross-lingual cases above, and both trace to the same
+  mechanism. The other two of the four cases are a single defect — word overlap cannot connect a
+  question asked in words to an answer given as a literal, which is why `"what port"` never reaches
+  `0.0.0.0:8443` and `"which command"` never reaches a Markdown code fence (D68). Raising `TOP_K`
+  was measured and rejected: 0.897 → 0.923 for +19% answer length.
 - **No quality claim is made about any model that was not benchmarked under the final
   configuration**, and **no pricing claim is made at all** — none was available.
 - Document size skews dense retrieval: on a corpus capped at 40 chunks per document R@1 was

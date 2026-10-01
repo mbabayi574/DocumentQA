@@ -1697,3 +1697,182 @@ No target number was set, deliberately: 0.88 is the measured floor and the targe
 by removing causes, not by picking a threshold that happens to be passable today. The number is
 reported per split, in the report's tables, and in the `eval` command's JSON, so it is visible
 without opening the report.
+
+# P10 — hardening
+
+Four items in `plan.md` §9's P10. Coverage on the six target directories was already **90%+**
+(the lowest is `answering/sentences.py` at 90%), so the work was the three named fixes and the
+two test asks. Two landed, one is a measurement, and one is blocked with the evidence that
+blocks it.
+
+## D67 — `min_lexical` removed, and the deletion is provably behaviour-preserving
+
+`plan.md` P10 named this and P9 deliberately deferred it, because it changes the gate's contract.
+The change is a deletion, so the contract got smaller:
+
+```diff
+- passed = ... OR (lexical >= min_lexical AND coverage >= min_coverage_high)
++ passed = ... OR (coverage >= min_coverage_high)
+```
+
+`lexical_score` is `bm25 / best_bm25 of the same query`, so the top lexical hit is exactly 1.0 for
+every query FTS matched at all — measured at **1.00 for 49 of the 50 eval questions**, answerable
+and unanswerable alike. The parameter had one live setting and its branch was decided by
+`min_coverage_high` regardless.
+
+The clause could only ever have refused in one state — `coverage > 0` with no lexical hit — and
+**that state is unreachable**: `lexical_score` is the max over the *lexical* hits, so it is 0.0
+only when FTS returned nothing, which happens only when the question has no searchable terms, and
+`token_coverage` is then 0.0 by definition.
+
+**The unit test that pinned this asserted a fiction for a year.** It hand-built
+`coverage=1.0, lexical=0.0` and expected a refusal, which is precisely the unreachable state. The
+invariant is now checked against a real index and real questions in
+`test_the_unreachable_state_is_unreachable` — a unit test can only assert it by constructing the
+signals, and constructing them is what produced the fiction. Caught while doing the deletion.
+
+Two confirmations that the axis was dead: the calibration grid shrank from 153 153 tested points
+to 76 100, and the **medoid operating point is unchanged** (0.52/0.66/0.40/0.80) with identical dev
+and held-out numbers.
+
+`config/thresholds.json` drops the key and moves to version 3. A copy still carrying the retired
+key loads unchanged, since only the named fields are read. The version is now derived from the
+file on disk: it was `thresholds.version + 1` off a grid point built at `version=1`, so every run
+wrote `2` forever and a changed rule would have shipped under the old rule's number.
+
+## D68 — `TOP_K` is the wrong knob, and D60's own cause labels were incomplete
+
+D60 named three causes for the cases where the system answers without quoting the fact. One was
+"truncation": `fa02`'s gold chunk sits at window position 10 with `top_k=5`, so raising `TOP_K`
+was the obvious fix. Measured, it is not:
+
+| `top_k` | gold quoted | answer chars | false answers | causes |
+|---|---|---|---|---|
+| **5** (shipped) | 0.897 | 240 | 0 | truncation 1, retrieval 2, answerer 1 |
+| 10 | 0.897 | 271 | 0 | answerer 2, retrieval 2 |
+| 15 | 0.923 | 286 | 0 | answerer 1, retrieval 2 |
+| 20 | 0.923 | 295 | 0 | answerer 1, retrieval 2 |
+
+The truncation cause **converts** to an answerer cause rather than being fixed, and the whole
+sweep buys one gold fact out of 43 for +19% answer length. `TOP_K` stays 5.
+
+Digging into why produced a finding that corrects P9. `fa02`'s gold sentence is a Markdown code
+fence:
+
+```text
+DROP overlap=0.000  '```\nauroractl install --channel stable\n```'
+```
+
+The question is *"which command installs the gateway?"* — in words — and the answer is a command,
+sharing no word with it. The word that connects them (`نصب`) is in the section heading, not the
+sentence. So `fa02` has **two independent blockers** and removing either one fixes nothing.
+
+**D60's three causes are therefore two.** Every non-retrieval case is the same defect: word
+overlap cannot connect a question asked in words to an answer given as a literal. `m01` (0.067)
+and `fa02` (0.000) are that failure at different distances. It is a limitation of the signal, not
+a tuning miss — §7.3 forbids padding answers with unrelated sentences, so the bar stays where it
+is, and §9.4's `SENTENCE_RERANK` was reserved for exactly this and had no implementation to
+measure.
+
+The classifier now prints the answerer's **own** overlap score for the sentence holding the fact,
+computed with the answerer's formula. The label was not wrong about the mechanism at `top_k=5`; it
+was incomplete, and only a number says so. It also dropped one case (`x08` is now refused, so it
+is not an answered answerable), leaving four.
+
+## D69 — the §12 Q3 second signal is not achievable on this dataset, and the reason is not the gate
+
+`plan.md` P10 set the acceptance condition: **answer all four cross-lingual eval cases and refuse
+all twelve unanswerable ones**, on both splits. Four signals were measured before concluding,
+because the cost of guessing wrong here is a shipped rule fitted to four data points.
+
+| signal | min over cross-lingual | max over unanswerable | separates? |
+|---|---|---|---|
+| `max_dense` (cosine) | 0.482 | 0.609 | no |
+| "is the top hit another language?" | 2 of 4 produce it | 2 of 12 also produce it | no |
+| cosine restricted to other-language candidates | 0.482 | **0.541** | no |
+| bm25 restricted to other-language candidates | 0.000 | 24.53 | no |
+
+**The language-aware signal that §12.3 offered costs nothing and still fails.** `chunks.language`
+is already stored, so "the best hit is in a different language from the question" is three lines.
+It is 2/12 on the unanswerable side — an off-topic Persian question's best English neighbour is
+often genuinely in another script, which is the whole point of a bilingual corpus.
+
+**And IDF-weighted coverage, which P9 had already ruled out, was the right instinct anyway**: in a
+six-document corpus a near-topic question's terms are *all* rare, so weighting them by rarity hands
+an irrelevant chunk the same score a relevant one gets. P9 measured it at a +0.23 separation margin
+against plain coverage's +0.86. Re-confirmed here, and it is the reason the remaining candidate is
+not an obvious win.
+
+**The binding collision is one specific pair, and it is semantic rather than statistical:**
+
+| case | | similarity to the other-language chunk |
+|---|---|---|
+| `n08` | *unanswerable* — "چه سیستم‌عاملی برای اجرای گیت‌وری توصیه می‌شود؟" (which OS is recommended?) | **0.541** |
+| `m05` | *answerable* — "What are the installation prerequisites and the default listen port?" | 0.525 |
+| `m03` | *answerable* — which error codes cover a TLS handshake failure? | 0.523 |
+| `x08` | *answerable* — what is the current version id? | 0.482 |
+
+`n08` and `m05` are **both about installing the gateway**, in different languages, and the
+nearest cross-language chunk for each is the same `deploy-guide.md` section. BGE-M3 places them
+0.016 apart and puts the *unanswerable* one higher. Requiring the gate to answer `m05` and refuse
+`n08` is therefore asking one embedding similarity to distinguish "which prerequisites" from
+"which operating system" across a language boundary, over a chunk that is genuinely about the same
+topic. That is not a gate design problem; it is the limit of what one cosine expresses.
+
+Distinguishing them needs the question's *specific* terms matched against the candidate's text in
+a shared representation. The only shared representation available without a translation resource
+is a second embedding of the question against the candidate — which is the same cosine. So (c) as
+specified is not implementable with what the project has, and the honest options are the two below.
+
+**What was NOT done, deliberately.** No rule was shipped to satisfy the condition. With four
+cross-lingual cases on one side of the split, any signal can be bent to pass, and a rule fitted to
+four points would be documented as a capability while measuring nothing — the exact failure D57
+records, where a grid's own bounds produced a confident "no feasible point" that was simply false.
+
+**The two honest routes, for the human:**
+
+1. **Enlarge the cross-lingual slice** before attempting (c) again — more cross-lingual *answerable*
+   **and** cross-lingual *unanswerable* cases, so the condition is fitted to more than four points.
+   Not guaranteed to help: if `n08`/`m05` adjacency is fundamental rather than a small-sample
+   artefact, more data will show the same overlap and that is itself the answer.
+2. **Accept the trade and drop cross-lingual**, documenting it as unsupported. `min_dense_alone`
+   already does the safe half of this: the branch refuses everything, the gate holds **0 false
+   answers on both splits**, and the README already states the limitation rather than claiming
+   §2's property.
+
+Until one of those is chosen, the branch stays as calibrated and cross-lingual stays documented as
+unreliable (D61). Nothing about the current behaviour is unmeasured: `m05` and `x01` are answered,
+`m03` and `x08` are refused with the chunk retrieved and semantically close, and both facts are
+asserted by name in `tests/integration/test_eval_live.py`.
+
+## D70 — the §2/§3 probe audit: one gap, and it was the dangerous one
+
+P10 asks for "a probe test for every §2/§3 behaviour production code depends on". The audit found
+almost all of them already present: the `index` permutation fallback, 401 fail-fast, 403 with the
+allowed model list, 429 with and without `Retry-After`, the dimension probe, the token bucket,
+L2-normalized vectors, Chroma's `n` clamping, its empty-collection behaviour, its metadata
+surviving a restart, and `/ready` failing on a broken dependency. That is the finding; writing
+redundant tests for them would have been noise.
+
+The gap was the narrowest and the most dangerous. **Every limit in `config.py` was validated
+relative to a constant in `config.py`** — self-consistent, and proving nothing about the provider.
+Raise `MAX_CHARS_PER_ITEM` to 50 000 and every existing validation still passes, while a
+45 000-character chunk that the provider rejects (the ceiling is 40 949, binary-searched over 15
+probes) starts failing ingest at runtime as a 400 from a third party, visible only on long
+documents.
+
+`tests/unit/test_provider_limits.py` asserts the measured numbers, with the margins explicit rather
+than merely "below": the per-item cap keeps a **2x** margin on the 40 949 ceiling; the request cap
+stays under the provider's 200 000; the rate limiter stays under 120/min **and** at least 3x the
+31 req/min a real re-ingest measures; and `MAX_ITEMS_PER_BATCH` is still the throughput peak (32:
+29.7 chunks/s against 23.6 at 64 and 28.2 at 128), so the next reader does not raise it on a hunch.
+Plus the splitter's actual invariant — no batch it builds can exceed any of the three caps — checked
+on the worst case rather than on batch counts, since a planner bug pairing two oversized items would
+still produce plausible counts.
+
+One thing recorded rather than fixed: `plan_batches` raises a bare `ValueError` where §5.3 would
+prefer a typed domain error. The path is **unreachable from the API** — the chunker caps a chunk at
+1 050 characters against the 20 000 guard, a 19x gap — so an error class for an input nothing can
+produce is the speculative work §10 rule 16 forbids. The test pins the message (the part a
+reachable caller would rely on) *and* asserts the 4x gap, so a future chunker change that narrowed
+it turns this into a reachable path and fails here rather than in production.
