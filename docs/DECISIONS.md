@@ -192,3 +192,51 @@ pins it at under 20% of lines, so a regression that made it worse fails the suit
 **Rejected:** Persian word segmentation to re-insert spaces. It needs a language model or
 a dictionary, would guess at boundaries, and a wrong space is a wrong token that quietly
 degrades retrieval — a larger risk than the one it removes.
+
+## D17 — chunk size is planned on the densest measured text, not prose (P3)
+
+**Context:** no tokenizer is available offline, so chunk size must be estimated in
+characters. Measuring BGE-M3's `usage.prompt_tokens` gave very different densities:
+
+| Sample | chars | tokens | chars/token |
+|---|---|---|---|
+| English prose | 232 | 56 | **4.14** |
+| Persian prose | 172 | 40 | **4.30** |
+| Persian with ZWNJ | 67 | 17 | 3.94 |
+| Identifiers (`ERR-404`, `EMBEDDING_AUTH`, `hnsw:space`) | 116 | 51 | **2.27** |
+| Markdown table | 456 | 315 | **1.45** |
+
+**Decision:** `CHARS_PER_TOKEN = 1.5`, the worst measured case, applied to every
+script. Target 350 tokens → 525 chars, hard cap 700 → 1 050 chars.
+**Reason:** the hard cap is an invariant the test suite enforces. Planning on prose's
+4.1 would let a table or code block reach ~1 900 tokens and breach it — and BGE-M3's own
+limit is 8 192. Sizing on the worst case makes the cap structural instead of hopeful.
+**Consequence, stated honestly:** prose chunks are smaller than ideal (525 chars rather
+than ~1 400). P9 §9.4 tunes chunk size; `docs/eval_report.md` should report whether this
+cost recall before anyone raises the constant.
+**Rejected:** a per-script table. The density problem is punctuation and identifiers,
+not alphabet — a Persian table is as dense as an English one, so a script table would be
+the wrong axis.
+
+## D18 — sections are chunked independently and never merged (P3)
+
+**Context:** plan.md P3 allows merging small adjacent sibling sections that fit the
+target.
+**Decision:** no cross-section merging at all. Each `Section` is chunked on its own.
+**Reason:** a chunk's `section_path` is what a citation reports. Merging would make a
+citation name two sections, or pick one arbitrarily. The cost is more, smaller chunks
+(67 chunks for a 67-section document) — cheaper than an ambiguous citation.
+**Rejected:** sibling merging, because the savings are one chunk per short paragraph
+while the ambiguity would surface in every user-facing answer.
+
+## D19 — a sentence-free page is cut mechanically (P3)
+
+**Context:** the first implementation split only on sentence boundaries. A
+table-of-contents page of `clean-code-excerpt.pdf` contains dot leaders and no
+terminators at all, so it stayed one 1 403-char chunk — 60 chunks in that book breached
+the hard cap.
+**Decision:** two passes. Pack sentences up to the target; then cut any span still over
+the hard cap at fixed intervals with the configured overlap. The second pass is what
+makes the cap hold for *any* input, not just prose.
+**Evidence:** `test_no_chunk_exceeds_the_hard_cap` went from 60 breaches to 0, and the
+gate re-run over all five fixtures reports `over_cap=0` for 1 225 chunks.
