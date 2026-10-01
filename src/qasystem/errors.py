@@ -98,3 +98,10 @@ class VectorStoreError(QASystemError):
 
     code = "VECTOR_STORE_UNAVAILABLE"
     http_status = 503
+
+
+class StorageLockedError(QASystemError):
+    """Another process already owns this data directory (plan.md L2)."""
+
+    code = "STORAGE_LOCKED"
+    http_status = 503

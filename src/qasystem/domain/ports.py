@@ -23,9 +23,14 @@ class Embedder(Protocol):
 
 
 class VectorStore(Protocol):
-    """Derived, rebuildable dense index (local persistent Chroma in production)."""
+    """Derived, rebuildable dense index (local persistent Chroma in production).
 
-    def ensure_collection(self, model_id: str, dimension: int) -> None: ...
+    ``ensure_collection`` takes no arguments on purpose: a store is constructed for one
+    ``(model_id, dimension)``, and re-supplying them here is an invitation to open the
+    wrong collection with the wrong vectors (I9).
+    """
+
+    def ensure_collection(self) -> None: ...
 
     def upsert(self, items: Sequence[VectorItem]) -> None: ...
 

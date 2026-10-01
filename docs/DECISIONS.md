@@ -354,3 +354,117 @@ request, and the provider's own words are the useful part of the message.
 
 Note the model list comes back in a **different order** each call. Nothing may depend on
 its order; the client only does a membership test.
+
+---
+
+## D25 — `with self._db:` was a no-op, so nothing ever rolled back (D25)
+
+The first P5 implementation wrapped every write in `with self._db:`. On a connection
+created with `isolation_level=None` (autocommit), that context manager is a **no-op**:
+`__exit__` calls `commit()`, finds no transaction open, and does nothing. Each statement
+in a multi-statement write committed on its own.
+
+`test_a_failed_write_leaves_no_partial_rows` caught it immediately — the version row and
+one chunk row survived the injected failure. But the test only passed *by accident*: I
+had already added `fail_after` to force a mid-transaction raise, and the assertion on
+`chunk_count` was checking the second chunk's absence rather than the first's presence.
+
+**Fix:** an explicit `_txn()` context manager that spells out `BEGIN` / `COMMIT` /
+`ROLLBACK`. Autocommit is the right mode for the connection; the transaction boundary
+has to be stated. Mutation-verified: making `_txn` commit on the exception path fails
+`test_a_failed_write_leaves_no_partial_rows` and
+`test_a_rolled_back_staging_can_be_retried`.
+
+**The lesson worth keeping:** a rollback test that passes for the wrong reason is worse
+than no test, because it certifies I3. Mutation testing is what distinguishes the two.
+
+## D26 — the `status` predicate in `eligible_chunks` was untested defence (D26)
+
+The view has two guards, per plan.md §6:
+
+```sql
+JOIN documents d ON d.doc_id = c.doc_id
+                AND d.status = 'active'
+                AND d.current_version = c.doc_version
+```
+
+Deleting the `d.status = 'active'` line left **all 54 storage and lexical tests green**.
+The reason: `mark_deleted` sets `status = 'deleted'` *and* `current_version = NULL`, and
+`NULL = c.doc_version` is never true, so the second guard already excludes the row. The
+`status` check was doing no observable work and had no coverage.
+
+It is still worth keeping — it is the guard against a half-applied delete, where
+`current_version` survives but the document is deleted. `test_a_deleted_document_is_
+ineligible_even_with_a_stale_current_version` now reproduces exactly that state by
+setting the column directly, and re-running the mutation fails it. This is the second
+time in two phases that a plausible-looking test was passing for the wrong reason.
+
+## D27 — `ensure_collection()` takes no arguments (D27)
+
+The P0 port was `ensure_collection(self, model_id: str, dimension: int)`. `ChromaStore`
+is constructed for one `(model_id, dimension)` and derives its collection name from both,
+so re-supplying them at call time is an invitation to open the wrong collection with the
+wrong vectors — the exact failure I9 exists to prevent.
+
+The port signature is now `ensure_collection(self)`. The isolation guarantee is stronger
+than the port ever claimed:
+
+- Different `dimension` → different collection name (`chunks__bge_m3__d1024` vs
+  `chunks__bge_m3__d1536`), verified by writing to one and reading zero from the other.
+- Different `model_id` → different collection name, same check.
+- **Truncation collision** → the one case the name cannot separate. `chunks__` + a
+  63-char limit means two long model ids can slugify to the same name, and then the
+  collection's stored `model_id` metadata is the only thing standing between a 3072-d
+  vector and a 1024-d space. `test_a_name_collision_is_refused_rather_than_mixed` builds
+  that collision from two 60-character prefixes and asserts the store refuses. Mutation
+  -verified: removing `_assert_isolated` fails it.
+
+## D28 — I10 is tested as "rebuild into an empty index", not "delete the directory" (D28)
+
+Chroma caches per path for the life of the process. Deleting `data/chroma/` from inside
+the test process leaves the collection fully populated in memory, so an in-process
+`rmtree` test would assert nothing about the guarantee.
+
+What was actually verified, out of band: writing a vector, `rm -rf` the directory, and
+opening a **new process** gives `count() == 0`. The operator's flow is real.
+
+The test therefore covers the half the code owns: an index with no vectors is restored
+from SQLite's `embedding_cache` with **zero** calls to the embedding API — asserted by
+passing a tripwire `embedder` whose `embed` raises. `rebuild` accepts that `embedder`
+argument and never calls it, which is the whole point of accepting it. A separate test
+rebuilds and then reopens the path to prove the restored index is persistent (L10 + I10
+together), and another proves a chunk whose vector is not cached is *skipped* and
+reported by `plan_reconcile` rather than half-restored.
+
+## D29 — Chroma metrics confirmed against the live library (D29)
+
+§2.2 was re-measured against the pinned `chromadb==1.5.9` before the adapter was
+written, and each observation has a test:
+
+| Observation | Test |
+|---|---|
+| identical vector → distance `0.0`, orthogonal → `1.0`, so `similarity = 1 - distance` | `test_cosine_distance_is_converted_to_similarity` (identical, orthogonal **and** opposite) |
+| `n_results` above `count()` is silently clamped | `test_n_is_clamped_to_the_collection_count` — clamped explicitly anyway, so `n` keeps its meaning |
+| querying an empty collection returns empty lists, not an exception | `test_querying_an_empty_collection_returns_nothing` |
+| collection `metadata` survives reopen and is readable after a client restart | `test_vectors_survive_a_restart` |
+| `heartbeat()` returns an int timestamp | `test_ping_succeeds_on_a_healthy_store` |
+| ids containing `:` (`handbook:v3:7`) are legal | `test_ids_keep_their_documented_shape` |
+| `upsert` replaces in place rather than duplicating | `test_upsert_replaces_a_vector_in_place` |
+| `get(limit=, offset=)` pages correctly | `test_list_ids_is_paged_but_complete` |
+
+**L2 verified across real processes.** `filelock==4.0.7` with `timeout=0` was checked
+by running a holder process and a second process against the same directory: the second
+raises `StorageLockedError` (`STORAGE_LOCKED`, 503). An earlier version of this test
+passed for the wrong reason — the holder held its `DataLock` as a *temporary*, which was
+garbage-collected during the sleep and released the lock, so the "second" process
+succeeded. `HOLDER` and `THIEF` are now module-level scripts with a named reference, and
+`test_the_lock_dies_with_the_process_that_held_it` proves a crashed holder does not leave
+a directory permanently unownable.
+
+**Not split, deliberately.** `sqlite_store.py` is 559 lines against the plan's "roughly
+400" target. The alternative was a `Database` base class plus a second subclass and a
+second connection to the same file — an inheritance layer, an extra connection, and a
+third parameter on `rebuild`, all to satisfy a number. The file is one cohesive
+repository over one SQLite database with a one-line docstring per method; splitting it
+would be reorganizing rather than simplifying. P11 revisits this with the whole codebase
+in view.
