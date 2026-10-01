@@ -1404,3 +1404,32 @@ win, that test fails and demands the reasoning be redone.
   `Bge-m3` / 1024; `reconcile` reports in-sync on a real corpus; `rebuild` restores real vectors.
 * **P6's cost invariants hold on real vectors**: a one-paragraph edit spent exactly 1 request; a
   section reorder and an identical re-upload spent **0**.
+
+## D56 — a test that pinned exact ranks from an approximate index (D56)
+
+The clean-clone verification caught a real flake: `test_fusion_ranks_within_the_window_never_
+over_the_corpus` passed in my working tree and failed roughly **one run in five** in a fresh
+clone, with no difference in the code.
+
+The cause was over-specification in the test, not a defect in the system. It asserted
+`dense_rank == 3` and `lexical_rank == 1` — exact positions from Chroma's **HNSW index**, which
+is an approximate nearest-neighbour search whose tie-breaking is not stable between runs.
+
+The claim that test exists to protect is D30's: *ranks are positions in the retrieved window, not
+in the corpus*. That claim does not need those particular numbers. It now asserts:
+
+* both ranks are single digits, where the corpus ordinal is ~40;
+* the score is exactly `w_d/(k+rank_d) + w_l/(k+rank_l)` **applied to the observed ranks**;
+* that differs materially from the corpus-ordinal score.
+
+Strictly more informative than the constants — it pins the rank's *meaning* rather than its
+value — and stable across runs.
+
+This is the third time the same lesson has appeared (D44's marker-stripping comparison, the
+middleware logging test, and now this): **assert the claim, not the incidental value.** A
+hard-coded constant in a test is a claim that the constant will never change, which is almost
+always a stronger claim than the one being made.
+
+> It is also the argument for §0.11's clean-clone gate. The failure was order-and-run dependent,
+> so it would have been attributed to flakiness and retried away rather than diagnosed. Running
+> the verification in a *fresh* environment is what made it visible.
