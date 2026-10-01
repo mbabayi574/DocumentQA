@@ -2,7 +2,7 @@
 Project: LLM-free extractive document QA (FastAPI + SQLite/FTS5 + local persistent ChromaDB).
 Source of truth: plan.md (read §0–§3 + your phase only).
 
-Commands: `make check` (ruff, mypy, pytest) · `make live` (same tests, real provider) · `make run` · `make smoke` · `make eval` · `make calibrate`
+Commands: `make check` (ruff, mypy, pytest) · `make live` (same tests, real provider) · `make run` · `make eval` · `make calibrate`
 Rules:
 - Test first. Never edit/skip tests to get green.
 - **Every phase runs `make live`, not just `make check`.** The fake embedder is a bag of hashed

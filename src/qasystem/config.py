@@ -66,8 +66,11 @@ class Settings(BaseSettings):
     overfetch: int = 2
     top_k: int = 5
     rrf_k: int = 60
-    dense_weight: float = 0.7
-    lexical_weight: float = 0.3
+    # Measured, not inherited: §9.4 experiment 1 on the eval corpus's dev split put
+    # 0.9/0.1 ahead of the old 0.7/0.3 on R@1, R@3, R@5 and MRR@5 without hurting the
+    # held-out split. The lexical arm still earns its 0.1 -- dense-only is worse (D59).
+    dense_weight: float = 0.9
+    lexical_weight: float = 0.1
 
     # --- gate + answer ---
     thresholds_path: Path = Path("./config/thresholds.json")

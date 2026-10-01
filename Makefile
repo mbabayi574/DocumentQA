@@ -1,7 +1,13 @@
 # LLM-free extractive document QA. Source of truth for phases: plan.md §7.
 UV := uv run
 
-.PHONY: check check-live live live-eval test run sync
+# The eval builds its own index. Ingesting a second corpus into the production data/ would
+# put 1225 chunks of one Persian book next to the 49-chunk eval corpus and measure the
+# fixture skew instead of the system (plan.md §2's retrieval reality check).
+EVAL_DATA := $(CURDIR)/data/eval
+EVAL_ENV := DATA_DIR=$(EVAL_DATA) SQLITE_PATH=$(EVAL_DATA)/qasystem.db CHROMA_PATH=$(EVAL_DATA)/chroma
+
+.PHONY: check check-live live eval calibrate test run sync
 
 sync: ## install dependencies (uv.lock is committed)
 	uv sync
@@ -17,8 +23,11 @@ live: ## the same tests against the REAL provider. Every phase runs this, not ju
 
 check-live: check live ## offline gate and live gate: the full definition of done
 
-live-eval: ## run the eval corpus against the real provider (P9)
-	RUN_LIVE=1 $(UV) python -m qasystem.cli eval
+eval: ## score the eval corpus against the real provider and print the metrics (P9 §9.2)
+	RUN_LIVE=1 $(EVAL_ENV) $(UV) python -m qasystem.cli eval
+
+calibrate: ## grid-search the gate on the dev split and write config/thresholds.json (P9 §9.3)
+	RUN_LIVE=1 $(EVAL_ENV) $(UV) python -m qasystem.cli calibrate
 
 test: ## tests only
 	$(UV) pytest

@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 DOC = "# Handbook\n\n## Install\n\nRun the installer on Linux. It checks the kernel first.\n"
 
 
@@ -206,22 +208,47 @@ def test_rebuild_on_an_empty_store_restores_nothing(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- calibrate / eval
 
 
-def test_calibrate_reports_its_missing_precondition_rather_than_guessing(tmp_path: Path) -> None:
-    """A calibration run with nothing to search must not write numbers with no evidence."""
-    result = run(tmp_path, "calibrate")
+# The dataset exists now, so these two cover the branches the CLI itself owns: a missing
+# dataset, and a provider that was never configured. Both are reported rather than guessed at,
+# because both would otherwise write numbers with no evidence behind them. What a real run
+# produces is covered in tests/eval/, where the harness is under test rather than the parser.
+def _main(monkeypatch: pytest.MonkeyPatch, dataset: Path, argv: list[str], **env: str) -> int:
+    from qasystem import cli
 
-    assert result.returncode == 1
-    body = payload(result)
-    assert body["calibrated"] is False
-    assert "no eval dataset" in str(body["reason"])
-    assert body["next"]
+    monkeypatch.setattr(cli, "DATASET", dataset)
+    monkeypatch.setattr(cli, "EVAL_DIR", dataset.parent)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(sys, "argv", ["qasystem.cli", *argv])
+    return cli.main(argv)
 
 
-def test_eval_reports_its_missing_precondition(tmp_path: Path) -> None:
-    result = run(tmp_path, "eval")
+@pytest.mark.parametrize("command", ["calibrate", "eval"])
+def test_a_missing_eval_dataset_is_reported_not_guessed_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """`calibrated: false` exists to prevent numbers with no evidence behind them, and the
+    way to honour that is to say what is missing and exit non-zero."""
+    assert _main(monkeypatch, tmp_path / "absent.jsonl", [command]) == 1
 
-    assert result.returncode == 1
-    assert "no eval dataset" in str(payload(result)["reason"])
+
+def test_the_eval_commands_refuse_to_run_without_a_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The eval measures the real model. Running it against the fake embedder would produce
+    a confident report about a system nobody will ship."""
+    assert (
+        _main(
+            monkeypatch,
+            Path(__file__).resolve().parents[1] / "eval" / "dataset.jsonl",
+            ["eval"],
+            APP_ENV="prod",
+            EMBEDDING_PROVIDER="remote",
+            EMBEDDING_API_KEY="",
+            EMBEDDING_MODEL="",
+        )
+        == 1
+    )
 
 
 # ---------------------------------------------------------------- failure reporting

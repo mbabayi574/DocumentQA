@@ -15,6 +15,7 @@ import pytest
 
 from qasystem.errors import ConfigError
 from qasystem.retrieval.gate import (
+    THRESHOLD_FIELDS,
     GateSignals,
     Thresholds,
     defaults,
@@ -278,18 +279,48 @@ def test_a_corrupt_thresholds_file_falls_back_to_uncalibrated_defaults(tmp_path:
     assert load_thresholds(path, model_id=MODEL) == defaults(MODEL)
 
 
-def test_the_shipped_thresholds_file_is_well_formed_and_uncalibrated() -> None:
-    """P7 ships conservative placeholders; P9 overwrites them. Until then it must say so."""
+def test_the_shipped_thresholds_file_is_calibrated_and_carries_its_evidence() -> None:
+    """`calibrated: true` is a claim about evidence, so the file has to carry the evidence.
+
+    P9 grid-searched these on the eval dataset's dev split (plan.md §9.3) and the committed
+    file records the split, the class balance and the dataset size that produced them. A
+    `calibrated: true` with no receipt is the failure mode the flag exists to prevent, so the
+    numbers and the provenance are asserted together and neither is trusted alone.
+    """
     from qasystem.config import load_settings
 
     path = load_settings(env_file=None, embedding_provider="fake", app_env="test").thresholds_path
-    assert path.exists(), "P7 ships config/thresholds.json; make calibrate overwrites it (P9)"
+    assert path.exists(), "config/thresholds.json is committed and `make calibrate` rewrites it"
     shipped = json.loads(path.read_text(encoding="utf-8"))
-    assert shipped["calibrated"] is False, "claiming calibration before P9 would be a lie"
+
+    assert shipped["calibrated"] is True, "P9 calibrated these; reverting to placeholders is a lie"
     assert shipped["model_id"] == "Bge-m3"
+    assert shipped["dataset_size"] == 50, "the number of questions behind the numbers"
+    assert sum(shipped["class_balance"].values()) == shipped["dataset_size"]
+    assert shipped["calibrated_on"]["split"] == "dev", "thresholds are fitted on dev only"
+    assert shipped["calibrated_on"]["false_answers"] == 0, "§9.3 prefers a 0% point"
+    assert "EVIDENCE LIMIT" in shipped["notes"], (
+        "a dataset this small gives coarse estimates and the file has to say so"
+    )
+
     loaded = load_thresholds(path, model_id=shipped["model_id"])
-    assert loaded.calibrated is False
-    assert 0.0 <= loaded.min_dense <= 1.0
+    assert loaded.calibrated is True
+    for name in THRESHOLD_FIELDS:
+        assert 0.0 <= getattr(loaded, name) <= 1.0
+
+
+def test_a_calibrated_file_for_another_model_is_a_hard_error() -> None:
+    """The strongest form of the model-isolation rule, now that a real calibration exists.
+
+    Before P9 the shipped file was uncalibrated, so the D51 fallback covered for it and this
+    was untested in anger: a `calibrated: true` file belonging to another model is a set of
+    real measurements being offered to the wrong model, and it must stop startup.
+    """
+    from qasystem.config import load_settings
+
+    path = load_settings(env_file=None, embedding_provider="fake", app_env="test").thresholds_path
+    with pytest.raises(ConfigError, match="calibrated for"):
+        load_thresholds(path, model_id="some-other-model")
 
 
 def test_a_threshold_outside_the_unit_interval_is_refused(tmp_path: Path) -> None:

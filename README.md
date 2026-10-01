@@ -34,19 +34,42 @@ trade-off to make.
 
 ### Measured quality
 
-Committed fixture corpus, 1 225 chunks from 5 documents, 12 answerable questions, gold =
-an exact phrase that must appear in the retrieved chunk (chunking-independent, `plan.md` §9.1):
+The P9 eval dataset: **50 questions, 6 documents, 49 chunks, 11 285 characters, bilingual**.
+Gold is an exact phrase that must appear in the retrieved chunk (chunking-independent,
+`plan.md` §9.1), and a multi-section question is only scored as answered when **every** gold
+phrase is in the window. Full report: [`docs/eval_report.md`](docs/eval_report.md).
 
-| Strategy | R@1 | R@3 | R@5 | MRR@5 |
-|---|---|---|---|---|
-| dense only | 0.67 | 0.83 | 0.92 | 0.757 |
-| lexical only | 0.42 | 0.67 | 0.75 | 0.531 |
-| hybrid (RRF) | 0.67 | 0.92 | 0.92 | 0.764 |
+| Strategy | R@1 | R@3 | R@5 | MRR@5 | false answers |
+|---|---|---|---|---|---|
+| dense only | 0.68 | 0.95 | 0.95 | 0.807 | 0 / 12 |
+| lexical only | 0.58 | 0.76 | 0.87 | 0.687 | 0 / 12 |
+| **hybrid (RRF, shipped)** | **0.76** | **0.95** | **0.95** | **0.846** | **0 / 12** |
 
-An earlier internal figure of `R@1 = 1.000` was measured on 75 chunks from three small
-documents and **did not reproduce**; it is withdrawn (D30). The numbers above are the
-honest ones, and they are the reason the system is hybrid and gated rather than
-dense-and-answer.
+Hybrid beats **both** single arms, which is what justifies the extra arm. Two earlier figures are
+withdrawn: `R@1 = 1.000` measured on 75 chunks (D30) and the 12-question table above this one
+(D59), replaced by these.
+
+**The evidence gate, calibrated.** Thresholds are grid-searched on the eval dataset's **dev
+split** and reported on the held-out split (`plan.md` §9.3, objective: maximise answered-on-
+answerable subject to a false-answer rate within 5%, preferring 0%):
+
+| split | answered on answerable | **false answers** | gold quoted in the cited text |
+|---|---|---|---|
+| dev (23 answerable / 7 unanswerable) | 0.91 | **0** | 0.91 |
+| held out (15 / 5) | 0.93 | **0** | 0.88 |
+
+Shipped in `config/thresholds.json` with `calibrated: true`, the split, the class balance and
+the dataset size alongside the numbers, and refused outright if the model ever changes
+(`plan.md` §5.1 I9). **50 questions over six documents is a coarse instrument** — one question
+is worth 0.05 recall — so these are operating points, not constants.
+
+**A 0% false-answer rate is not the same as being right.** `gold quoted` is the metric that
+distinguishes them, and it exists because §9.2's list did not: an answered question that cites
+a document which does not contain the answer passes the refusal rate, the R@k, and the citation
+*validity* check. On the held-out split 12% of the facts the system claims to have answered are
+not in the text it quotes. Every case is named with its cause in
+[`docs/eval_report.md`](docs/eval_report.md) — three cite the wrong document, one is a `top_k`
+truncation, one is a sentence the overlap bar correctly refuses.
 
 ### Why the choice holds
 
@@ -56,12 +79,19 @@ dense-and-answer.
    removes an entire class of bugs — misrouted queries, language filters, per-language
    collections — that invariant I9 would otherwise have to police.
 
-   *Live-verified, and it has a measured cost.* An English question is retrieved and
-   answered from the Persian PDF. But retrieval has to do it alone: token coverage counts
-   *shared* tokens, so it is structurally zero for a cross-lingual hit, and admitting one
-   costs a **1-in-9 false-answer rate** that the embedding's cosine cannot separate from a
-   real one. `docs/DECISIONS.md` D47–D48 has the numbers, and `plan.md` §12 puts the
-   trade-off to the human rather than hiding it behind a tuned-looking constant.
+   *Live-verified — and the P9 measurement showed the property does not hold as stated, so it
+   is worth being precise about what works.* The same English question was asked against three
+   indexes: it is **refused** on a 7-chunk Persian index and **answered** on 49- and
+   1225-chunk ones, with `max_dense` flat at 0.513–0.547 across all three. Absolute cosine does
+   not drift with corpus size; what changes is token coverage, which counts *shared* tokens and
+   is therefore structurally zero when nothing else in the corpus happens to share a word. So
+   cross-lingual retrieval on this system works when an unrelated document lends it lexical
+   corroboration, and not otherwise — luck rather than capability. The arithmetic is in
+   `plan.md` §12 question 3: refusing the hardest unanswerable case needs `min_dense_alone >
+   0.609` and the real cross-lingual hits measure 0.513–0.547, so the branch cannot be both
+   reachable and safe. That question is open, with the measurements in front of it (D61).
+   What P9 did fix: the **1-in-9 false-answer rate does not reproduce** on a balanced corpus
+   where every question has a known answer — it is 0 of 12 unanswerable, on both splits.
 2. **Cheapest at the quality we measured.** Smallest dimension, lowest latency, and no
    measured retrieval gain available from the larger models on this corpus. Their extra
    cost buys nothing here.
@@ -74,21 +104,30 @@ dense-and-answer.
 
 ### Limits of this evidence, stated plainly
 
-- One corpus, 5 documents, 12 answerable and 2 unanswerable questions. **Far too small to
-  certify a false-answer rate**; the P9 dataset (≥50 questions, 60/40 split) exists for
-  that.
-- One question is worth 0.083 R@1 at this sample size, so the hybrid-weight difference
-  below is *not* yet significant.
-- No ablation over chunk size or fusion weights. The largest measured efficiency finding
-  is that cost per character falls from 105 ms per 1 000 chars at 500-char items to 36 ms
-  at 2 000 and 11 ms at 8 000 — 2.9× and 9.5× cheaper — but raising chunk size trades
-  throughput against retrieval precision, so it is a P9 experiment, not a settled choice.
+- **50 questions over six documents is still a small eval.** One question is worth 0.05
+  recall and a single flipped answer moves a rate by a quarter. The thresholds are coarse
+  operating points and the file says so.
+- **Cross-lingual retrieval is weaker than the headline claim**, as measured above (D61).
+  2 of the 4 cross-lingual questions in the eval dataset are answered; the other 2 are refused
+  by the cosine bar with the chunk retrieved and semantically close.
+- **Chunk size was not resolved.** The eval corpus has 49 sections in 49 chunks with a longest
+  section of 635 characters, below the smallest hard cap tried, so every chunk-size row is
+  identical *by construction* and the experiment cannot discriminate (D64). The cost half
+  stands: 105 ms per 1 000 chars at 500-char items, 36 ms at 2 000, 11 ms at 8 000 — 2.9× and
+  9.5× cheaper. No change was adopted, because nothing was measured.
+- **Query latency is the provider's, not ours.** Measured cold on a fresh index: P50 354 ms,
+  P95 448 ms. The same queries with the embedding cached take P50 10 ms, so retrieval, fusion,
+  gating and answer assembly together are ~3% of a query (D54, D63). Any P95 quoted without
+  that qualification is measuring someone else's server.
+- **`min_lexical` is a threshold on a saturated signal and does nothing** (D58):
+  `lexical_score` is bm25 divided by the best bm25 of the same query, so the top hit is
+  exactly 1.0 for every query FTS matched. Recorded for removal in P10/P11.
 - **No quality claim is made about any model that was not benchmarked under the final
   configuration**, and **no pricing claim is made at all** — none was available.
-- Document size skews dense retrieval: on a corpus capped at 40 chunks per document R@1
-  was 0.75, against 0.67 on the full corpus where one book is 84% of the index. This is a
-  property of the corpus, and it is why `DENSE_WEIGHT=0.7` is treated as a starting point
-  awaiting P9 calibration rather than a tuned constant.
+- Document size skews dense retrieval: on a corpus capped at 40 chunks per document R@1 was
+  0.75, against 0.67 on the full corpus where one book is 84% of the index. This is why the
+  eval runs against **its own index** in `data/eval/` rather than alongside the fixtures — the
+  fixture skew would have measured itself.
 
 ### One implementation detail worth knowing
 
@@ -104,8 +143,8 @@ response shape that would otherwise silently mislabel every vector.
 | Document | Contains |
 |---|---|
 | [`plan.md`](plan.md) | Requirements, BGE-M3 capabilities, architecture, invariants, phases P6–P11, coding standards, Definition of Done |
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | D1–D31: every decision with its measurement or mutation evidence |
-| [`docs/eval_report.md`](docs/eval_report.md) | P9: full metrics and threshold calibration *(pending)* |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | D1–D65: every decision with its measurement or mutation evidence |
+| [`docs/eval_report.md`](docs/eval_report.md) | P9: 50-question metrics, the weight and chunk-size experiments, the calibration, and the five answers that cite the wrong source |
 
 ## Quick start
 
@@ -114,6 +153,11 @@ uv sync
 cp .env.example .env      # add EMBEDDING_API_KEY, EMBEDDING_MODEL=Bge-m3
 make check                # ruff + mypy + pytest, fully offline
 make run                  # uvicorn --workers 1  (a single worker is required)
+
+# P9, against the real provider (needs EMBEDDING_API_KEY; writes its own data/eval index)
+make eval                 # metrics for hybrid vs dense-only vs lexical-only  -> tests/eval/report.md
+make calibrate            # the same, plus grid-searched thresholds -> config/thresholds.json
+make live                 # the test suite against the real provider
 ```
 
 See [`plan.md`](plan.md) §7 for every tunable and §13 for the release checklist.

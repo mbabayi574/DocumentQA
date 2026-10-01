@@ -1,17 +1,28 @@
 {
-  "version": 1,
-  "model_id": "Bge-m3",
-  "calibrated": false,
-  "min_dense": 0.47,
-  "min_dense_alone": 0.50,
-  "min_coverage": 0.25,
-  "min_lexical": 0.80,
-  "min_coverage_high": 0.50,
-  "min_sentence_overlap": 0.15,
-  "dataset_size": 18,
-  "measured_bands": {
-    "answerable_max_dense": [0.501, 0.631],
-    "unanswerable_max_dense": [0.359, 0.451]
+  "calibrated": true,
+  "calibrated_on": {
+    "answerable": 23,
+    "answered_rate": 0.913,
+    "false_answers": 0,
+    "split": "dev",
+    "unanswerable": 7
   },
-  "notes": "NOT CALIBRATED. The two dense bars are measured, not guessed: a live run over the committed corpus with real BGE-M3 gave max_dense 0.501-0.631 for answerable questions and 0.359-0.451 for unanswerable ones, and both bars clear the irrelevant band. min_dense_alone is the higher of the two because that branch has no corroborating coverage -- it exists for the cross-lingual case, where coverage is structurally zero because there are no shared tokens (D47). min_coverage_high is higher than min_coverage so the lexical branch is the stricter of the two. EVIDENCE LIMIT: 18 questions, hand-picked, mostly from a 7-chunk Persian PDF. That is enough to reject a guess that sat inside the answerable range and not enough to call anything calibrated. P9 grid-searches on the dev split and rewrites this file with calibrated=true. Thresholds are keyed on model_id and a mismatched file is refused, never reused."
+  "class_balance": {
+    "answerable_en": 15,
+    "answerable_fa": 10,
+    "exact_term": 8,
+    "multi_section": 5,
+    "unanswerable_near": 8,
+    "unanswerable_off": 4
+  },
+  "dataset_size": 50,
+  "min_coverage": 0.4,
+  "min_coverage_high": 0.8,
+  "min_dense": 0.52,
+  "min_dense_alone": 0.66,
+  "min_lexical": 0.8,
+  "min_sentence_overlap": 0.15,
+  "model_id": "Bge-m3",
+  "notes": "Grid-searched on the dev split of tests/eval/dataset.jsonl (plan.md section 9.3): maximise answered-on-answerable subject to a false-answer rate within 5%, preferring 0%. Scored with the production gate function, and the operating point re-measured on the held-out split by rebuilding the real service with it. EVIDENCE LIMIT: 50 questions over six documents, so one question is worth up to 0.05 recall and a single flipped answer moves a rate by a quarter. These are coarse operating points, not constants. Keyed on model_id: a calibrated file for another model is a hard error, never reused (D42, D51). NOTE ON min_lexical: it is 1.0 because `lexical_score` is bm25 divided by the best bm25 of the same query, so the top hit is exactly 1.0 for every query FTS matched at all. The parameter is saturated and carries no information; the branch it guards is decided by min_coverage_high alone (D58).",
+  "version": 2
 }

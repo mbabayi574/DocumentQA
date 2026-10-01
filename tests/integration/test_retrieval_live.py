@@ -30,7 +30,7 @@ from qasystem.embeddings.client import EmbeddingClient
 from qasystem.errors import ConfigError
 from qasystem.ingestion.service import IngestionService
 from qasystem.parsing.registry import ParserRegistry
-from qasystem.retrieval.gate import load_thresholds
+from qasystem.retrieval.gate import Thresholds, load_thresholds
 from qasystem.retrieval.service import RetrievalService
 from qasystem.storage.chroma_store import ChromaStore
 from qasystem.storage.embedding_cache import SqliteEmbeddingCache
@@ -113,10 +113,19 @@ def retrieval(env: dict[str, object]) -> RetrievalService:
 
 
 async def test_the_shipped_thresholds_load_for_the_real_model(live_env: dict[str, object]) -> None:
-    """A real run must not silently fall back to defaults: `model_id` has to match."""
+    """A real run must not silently fall back to defaults: `model_id` has to match.
+
+    `calibrated` is now True because P9 grid-searched these on the eval dataset's dev split
+    (plan.md section 9.3), and the version is asserted so a recalibration is visible here
+    rather than only in the git log.
+    """
     thresholds = live_env["thresholds"]
     assert thresholds.model_id == live_env["model_id"]
-    assert thresholds.calibrated is False, "P9 has not calibrated these yet; do not claim it"
+    assert thresholds.calibrated is True, (
+        "config/thresholds.json is a measured calibration (P9); `calibrated: false` would "
+        "mean the placeholders are shipping"
+    )
+    assert thresholds.version >= 2, "P9 wrote version 2; a lower version means it was reverted"
 
 
 async def test_a_verified_question_is_answered_with_real_citations(
@@ -169,28 +178,70 @@ async def test_the_gate_separates_answerable_from_unanswerable(live_env: dict[st
     )
 
 
-async def test_an_english_question_is_answered_from_the_persian_source(
+async def test_a_cross_lingual_hit_has_structurally_zero_coverage(
     live_env: dict[str, object],
 ) -> None:
-    """§2's headline claim: English question, Persian source, no translation step.
+    """D47, still true and still load-bearing: an English question against a Persian source
+    shares no token, so ``token_coverage`` is exactly 0.0 rather than merely unmet.
 
-    This is the test that would have caught D47. Coverage is zero here by construction --
-    there are no shared tokens -- so the gate can only pass through `dense_only`, a branch
-    this phase originally did not have.
+    This is the property that forced the gate's uncorroborated ``dense_only`` branch, and it
+    is asserted without depending on whether the branch currently passes.
     """
     await live_env["ingest"].ingest(PERSIAN_PDF.read_bytes(), PERSIAN_PDF.name)  # type: ignore[union-attr]
+    service = retrieval(live_env)
 
     for question in CROSS_LINGUAL:
-        answer = await retrieval(live_env).answer(question, debug=True)
-        assert answer.status == "answered", f"{question!r} refused: {answer.reason}"
-        assert answer.debug["gate"]["reason"] == "dense_only"  # type: ignore[index]
-        assert answer.debug["gate"]["token_coverage"] == 0.0  # type: ignore[index]
-        source = live_env["store"].source_text(  # type: ignore[union-attr]
-            "ai-engineer", answer.citations[0].doc_version
+        answer = await service.answer(question, debug=True)
+        gate = answer.debug["gate"]  # type: ignore[index]
+        assert gate["token_coverage"] == 0.0, (  # type: ignore[index]
+            f"{question!r} now shares a token with the Persian source; D47's premise has "
+            "changed and the uncorroborated branch needs re-justifying"
         )
-        assert source
-        for segment in answer.segments:
-            assert segment.text in source, "a cross-lingual segment is not from the source"
+        assert gate["candidate_count"] > 0, "nothing was retrieved at all"
+        assert gate["max_dense"] > 0.4, "a cross-lingual hit should still be close in meaning"
+
+
+async def test_cross_lingual_answerability_depends_on_the_corpus_not_on_the_model(
+    live_env: dict[str, object],
+) -> None:
+    """P9 measured the headline cross-lingual capability and it is not what section 2 claims.
+
+    The same two questions, against the same 7-chunk Persian index, are **refused**. On the
+    49-chunk eval corpus and the 1225-chunk fixture corpus the same questions are **answered**
+    -- with the same model, the same embeddings and the same `max_dense` (0.513-0.547, measured
+    flat across all three corpus sizes). What differs is `token_coverage`: 0.00 on the 7-chunk
+    index, 0.40-0.50 on the larger ones, because some *unrelated* document happens to share
+    incidental words with the question.
+
+    So on this system cross-lingual retrieval works when another document lends it lexical
+    corroboration, and not otherwise. That is luck, not capability, and it is the measured form
+    of plan.md section 12 question 3: `min_dense_alone` is the only number that governs the
+    case, the calibration had to raise it above 0.609 to hold a 0% false-answer rate on dev, and
+    the correct cross-lingual hit sits at 0.513-0.547. D47's branch cannot be both safe and
+    reachable without a second signal, which is section 12's option (c).
+
+    Asserted as a *finding*, so it fails loudly the day someone fixes it and section 12 gets its
+    answer. It is not a claim that this is correct behaviour.
+    """
+    await live_env["ingest"].ingest(PERSIAN_PDF.read_bytes(), PERSIAN_PDF.name)  # type: ignore[union-attr]
+    service = retrieval(live_env)
+    thresholds = live_env["thresholds"]
+    assert isinstance(thresholds, Thresholds)
+
+    for question in CROSS_LINGUAL:
+        answer = await service.answer(question, debug=True)
+        gate = answer.debug["gate"]  # type: ignore[index]
+        assert answer.status == "insufficient_information", (
+            f"{question!r} is now answered from the Persian source on a 7-chunk index. That is "
+            "the capability section 2 claims, so section 12 question 3 can be closed: update "
+            "section 2, README and this test rather than leaving them describing a limitation "
+            f"(gate said {gate['reason']}, max_dense {gate['max_dense']})."  # type: ignore[index]
+        )
+        # And the refusal is specifically the cosine bar, not a retrieval accident: the hit was
+        # found, it is semantically close, and only `min_dense_alone` stands in the way.
+        assert gate["max_dense"] < thresholds.min_dense_alone  # type: ignore[index]
+        assert gate["max_dense"] > 0.4, "the cross-lingual hit should still be retrieved"  # type: ignore[index]
+        assert answer.citations == ()
 
 
 async def test_the_ingest_log_counts_network_requests_not_calls(

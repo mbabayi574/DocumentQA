@@ -70,8 +70,10 @@ def test_the_graph_probes_the_real_model_and_ready_reports_it(live_client: Any) 
     assert body["status"] == "ready"
     assert body["embedder"] == "remote"
     assert body["model_id"] and body["dimension"] > 0
-    # The shipped thresholds belong to the real model, so they load rather than fall back.
-    assert body["thresholds_calibrated"] is False
+    # The shipped thresholds are a real calibration for the real model (P9), so they load
+    # rather than falling back, and /ready says so. Asserted here because this is the
+    # user-visible surface of the claim.
+    assert body["thresholds_calibrated"] is True
 
 
 def test_a_real_upload_and_query_round_trip(live_client: Any) -> None:

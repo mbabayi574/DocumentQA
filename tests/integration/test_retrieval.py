@@ -662,10 +662,12 @@ async def test_fusion_ranks_within_the_window_never_over_the_corpus(env: Any) ->
 
     # The score is exactly the window-rank formula on those ranks, which makes the ranks'
     # *meaning* the assertion rather than their value.
+    weights = env.settings
     assert best.score == pytest.approx(
-        0.7 / (60 + best.dense_rank) + 0.3 / (60 + best.lexical_rank)
+        weights.dense_weight / (60 + best.dense_rank)
+        + weights.lexical_weight / (60 + best.lexical_rank)
     )
-    corpus_scored = 0.7 / (60 + ordinal) + 0.3 / (60 + ordinal)
+    corpus_scored = (weights.dense_weight + weights.lexical_weight) / (60 + ordinal)
     assert abs(best.score - corpus_scored) > 1e-4
 
     assert (await env.retrieval.answer("quota megabytes")).status == "answered"

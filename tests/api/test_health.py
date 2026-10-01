@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,8 +14,41 @@ from qasystem.config import Settings, load_settings
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    settings = load_settings(env_file=None, embedding_provider="fake", app_env="test")
+def client(tmp_path: Path) -> Iterator[TestClient]:
+    """The fake embedder, and a thresholds file that belongs to it.
+
+    P9 made the shipped ``config/thresholds.json`` a *calibrated* file for ``Bge-m3``, and a
+    calibrated file for another model is a hard ``ConfigError`` (D51) rather than a
+    fallback. That is the rule working, not a broken fixture: an offline test on the fake
+    embedder must supply its own numbers, exactly as a real deployment with a different
+    model would have to.
+    """
+    thresholds = tmp_path / "thresholds.json"
+    thresholds.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model_id": "fake-embedder",
+                "calibrated": False,
+                "min_dense": 0.05,
+                "min_dense_alone": 0.99,
+                "min_coverage": 0.70,
+                "min_lexical": 0.50,
+                "min_coverage_high": 0.90,
+                "min_sentence_overlap": 0.15,
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings(
+        env_file=None,
+        embedding_provider="fake",
+        app_env="test",
+        data_dir=tmp_path,
+        sqlite_path=tmp_path / "qasystem.db",
+        chroma_path=tmp_path / "chroma",
+        thresholds_path=thresholds,
+    )
     assert isinstance(settings, Settings)
     with TestClient(create_app(settings)) as test_client:
         yield test_client

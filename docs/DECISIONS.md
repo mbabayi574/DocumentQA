@@ -1433,3 +1433,209 @@ always a stronger claim than the one being made.
 > It is also the argument for §0.11's clean-clone gate. The failure was order-and-run dependent,
 > so it would have been attributed to flakiness and retried away rather than diagnosed. Running
 > the verification in a *fresh* environment is what made it visible.
+
+---
+
+# P9 — evaluation and gate calibration
+
+`tests/eval/` is the harness, `tests/eval/dataset.jsonl` the 50 questions, `tests/eval/corpus/`
+the six documents, `tests/eval/report.md` the deliverable and `config/thresholds.json` the
+calibration. `make eval` and `make calibrate` run it against the real provider into
+`data/eval/`, which is a **separate index on purpose**: the fixture corpus is 84% one Persian
+book and would have measured its skew instead of the system.
+
+## The headline
+
+| | dev (30 questions) | held out (20) |
+|---|---|---|
+| answered on answerable | **0.91** (23 answerable) | **0.93** (15) |
+| **false answers** | **0** of 7 unanswerable | **0** of 5 |
+| R@1 / R@3 / R@5 | 0.83 / 0.96 / 0.96 | 0.67 / 0.93 / 0.93 |
+| gold quoted in the cited text | 0.91 | 0.88 |
+
+Shipped thresholds: `min_dense=0.52  min_dense_alone=0.66  min_coverage=0.40
+min_lexical=0.80  min_coverage_high=0.80`. 26 040 feasible operating points of 153 153 tested,
+a point being feasible when it refuses every unanswerable dev case. §9.3's target was ≤5% false
+answers preferring 0%, and the answer is **0% on both splits** — which reproduces nothing of
+D47's *1 in 9*, because that measurement was on a 7-chunk PDF and this is a 49-chunk corpus
+with a known answer for every question.
+
+What P9 also found, and it matters more than the table: **a false-answer rate of 0.00 does not
+mean the answers are right.** See D60.
+
+## D57 — a grid search that reported "no feasible point" because of its own bounds
+
+The first live `calibrate` run said no operating point could hold a 0% false-answer rate. That
+was **false**, and the cause was the search space, not the data: `COVERAGE_GRID` stopped at
+0.40 while the discriminating value is ~0.44. Widening it found 26 040 feasible points
+immediately.
+
+A grid search's negative result is only evidence about the region searched. The grid now spans
+0.30–0.70 on the dense bars and 0.00–1.00 on the coverage bars, and `choose()` raises rather
+than returning a best-effort point, so "nothing is feasible" is always a statement about data
+and never about a missed bound. The same lesson bit §9.4 experiment 2 (D64).
+
+## D58 — `min_lexical` is a threshold on a saturated signal and cannot discriminate
+
+`LexicalHit.lexical_score` is `bm25 / best_bm25_of_the_same_query`, so the **top hit is exactly
+1.0 for every query FTS matched at all**. The gate reads `max(lexical_score)` over candidates,
+which is therefore 1.0 whenever FTS returned anything. Measured across all 50 eval questions:
+`lexical` is 1.00 for 49 of 50 — every near-topic unanswerable *and* every answerable.
+
+So `min_lexical` can only be 0.0 or 1.0, and its branch (`lexical AND coverage`) is decided by
+`min_coverage_high` alone. The parameter is documented as evidence of an exact-term match and
+measures nothing. `LEXICAL_GRID` now carries three values instead of seven, because searching a
+dead axis harder only looks like rigour.
+
+Not fixed here. The fix is a change to the gate's contract and its debug payload, it would
+invalidate P7's live tests, and it buys nothing measurable — the calibrated branch works without
+it. Recorded for P10/P11, where the plan already schedules a refactor pass. The shipped
+`min_lexical: 0.80` is what the grid chose *given the signal saturates at 1.0*, and
+`config/thresholds.json` says so in its notes rather than letting the number look meaningful.
+
+## D59 — fusion weights: 0.9/0.1 measured better than 0.7/0.3, and the lexical arm still earns its 0.1
+
+§2 measured 0.9/0.1 ahead of the 0.7/0.3 default on 12 questions and called it "suggestive, not
+decisive". P9 re-ran the sweep on the eval dataset, dev and held-out separately:
+
+| weights | dev R@1 | dev R@3 | dev MRR@5 | held-out R@1 | held-out R@3 |
+|---|---|---|---|---|---|
+| 0.7/0.3 (was shipped) | 0.78 | 0.91 | 0.848 | 0.67 | 0.87 |
+| **0.9/0.1 (adopted)** | **0.83** | **0.96** | **0.884** | **0.67** | **0.93** |
+| 1.0/0.0 (dense only) | 0.78 | 0.96 | 0.862 | 0.53 | 0.93 |
+
+Better on dev on all four metrics, worse on none of the held-out ones, which is exactly §9.4's
+adoption criterion. Adopted in `config.py` and `.env.example`.
+
+**The lexical arm still earns its 0.1.** Dense-only is worse than hybrid on dev R@1 (0.78 vs
+0.83) and much worse on held-out R@1 (0.53 vs 0.67). §2's other finding is now decisive rather
+than suggestive: hybrid beats both single arms.
+
+**A property this exposed, verified rather than assumed:** the gate's verdict is *completely
+weight-independent* as long as both arms are non-zero. Measured: at all eleven weight points,
+the number of cases whose gate verdict differs from the shipped configuration is **0**. The
+reason is structural — `max_dense`, `lexical` and `token_coverage` are maxima over the candidate
+set, `overlap` is a set intersection of the top-k sets, and the union of the two arms' windows
+does not depend on the weights. So changing the weights changes which evidence is quoted, never
+whether the system answers. That is why §9.2 could measure single-arm baselines at all (D39)
+and why the calibration is valid for every hybrid weight setting.
+
+## D60 — a false-answer rate of 0.00 hid an entire failure mode
+
+`x01` asks *"the exact path of the file that holds the gateway's configuration"*. The path is
+`/etc/aurora/gateway.toml`, in the **Persian** deployment guide. The system answered it, with
+citations, citing `handbook.md` — the English handbook, which mentions a configuration file and
+contains no path. A caller who cannot read the cited language has no way to notice.
+
+Nothing in §9.2's metric list saw it. R@k is about the *candidate window*; the false-answer rate
+counts *unanswerable* questions; `answered` counts gate passes. An answered question citing a
+document that does not contain the answer satisfied all three.
+
+Added **`gold quoted`**: the share of gold phrases appearing in a chunk the answer actually
+cites. 0.91 dev, 0.88 held-out — so **12% of the facts the system claims to have answered, it did
+not quote.** The report names every case and classifies the cause, because the three causes need
+different fixes:
+
+| case | cause | measurement |
+|---|---|---|
+| `x01`, `x08`, `m05` | **retrieval** | the citation names a document that does not hold the answer |
+| `fa02` | **truncation** | the gold chunk is in the window at position **10**, below `top_k=5` |
+| `m01` | **answerer** | the gold chunk is inside `top_k`, but the sentence scores **0.067** against a 0.15 bar while the sentence *beside* it — which talks about the port without containing the number — scores **0.153** and is quoted instead |
+
+`m01` is a limitation of the signal rather than a tuning miss: word overlap cannot connect
+"what port" to a literal. Lowering `min_sentence_overlap` to reach it would pad every answer
+with unrelated sentences, which §7.3 forbids.
+
+## D61 — cross-lingual retrieval here is luck, not capability
+
+§2 claims English-question-against-Persian-source as the headline property. P9 measured it, and
+the same two questions were asked against three indexes:
+
+| index | chunks | `max_dense` | `token_coverage` | answered? |
+|---|---|---|---|---|
+| `ai-engineer.pdf` alone | 7 | 0.519 / 0.513 | **0.00** / 0.00 | **no** |
+| eval corpus | 49 | 0.519 / 0.513 | 0.00 / 0.25 | no / yes |
+| fixtures | 1225 | 0.533 / 0.547 | **0.40** / 0.50 | **yes** |
+
+Two findings, and the first refuted the hypothesis I expected:
+
+* **Absolute cosine does not drift with corpus size.** Answerable `max_dense` is 0.513–0.547
+  across 7, 49 and 1225 chunks — flat. So thresholds are not a corpus-size problem, and the
+  instinct to normalise similarity by corpus size would have been a fix for a defect that does
+  not exist.
+* **What varies is `token_coverage`, and that is the whole story.** On the 7-chunk index the
+  cross-lingual question shares no token with anything, so coverage is structurally 0 (D47) and
+  the only branch that can admit it is the uncorroborated `dense_only` one, which needs
+  `max_dense ≥ min_dense_alone = 0.66`. It scores 0.519, so it is refused. On the larger indexes
+  an **unrelated** document lends the question incidental lexical coverage (0.40, 0.50) and the
+  corroborated branch admits it.
+
+So cross-lingual retrieval works on this system when some other document happens to share words
+with the question. That is not the property §2 claims, and no threshold on cosine can supply it:
+D47's branch must be either reachable (and then it admits `n03` at 0.609) or safe (and then it
+refuses the real hit at 0.519). **This is plan.md §12 question 3, now measured on both sides.**
+
+## D62 — a "safer" tie-break turned cross-lingual retrieval off, and the fix is a medoid
+
+When many points tie on dev recall at 0 false answers, `choose()` was picking the *strictest*
+value on every axis. That sounds conservative and was the opposite: `min_dense` only gates the
+branch that **also** requires `token_coverage`, so a corroborated hit is already vouched for.
+Raising it refuses nothing extra — it buys no measured safety and costs transferability. With
+`min_dense = 0.60` the fixture corpus's cross-lingual question (0.533) was **refused**; at 0.52,
+which the grid showed gives the *identical* 0.913 recall at 0 false answers, it is answered.
+
+Preferring looser then over-corrected and picked `min_coverage_high = 1.0`, an extreme that
+silenced the exact-term branch and cost a held-out answer.
+
+Both were the same mistake: treating an extreme on one axis as if that axis were the important
+one, when the data says none of them is. The tie-break is now a **medoid** — among points with
+equal measured performance and equal safety, the one closest to the centre of the feasible set.
+Scale-free, no per-axis argument, and it lands on a point that is ordinary in every dimension at
+once, which is what a threshold set wants, because thresholds are applied to corpora nobody has
+measured yet.
+
+An earlier version also omitted `min_coverage` from the sort key entirely, so the calibration's
+output depended on iteration order: a number that changes when nothing about the data changed is
+not a measurement.
+
+## D63 — the harness nearly published a latency number 30× too small
+
+The first two live runs reported **P50 11 ms** "cold". They were not cold: a second
+`make eval` finds every question already in `embedding_cache`, so the "first touch of every
+question" was nothing of the kind. The real figure is **P50 354 ms, P95 448 ms**, and the
+warm-cache figure (P50 10 ms) is the system's own share.
+
+The mistake was in the harness — the thing whose job is to not misattribute latency, committing
+the misattribution D54 warns about. Latency is now measured on a throwaway index built exactly
+like the real one, on every run, at a cost of ~56 provider requests. Re-running an evaluation
+must not change what it measures, and the cheapest way to guarantee that is to never reuse the
+state the measurement depends on.
+
+## D64 — §9.4 experiment 2 cannot discriminate on this corpus, and the reason is measured
+
+Chunk size is §2's largest *cost* lever (9.5× cheaper per character at 8 000 than at 500). The
+retrieval side is unmeasurable here: the eval corpus is **49 sections in 49 chunks and its
+longest section is 635 characters**, below the smallest hard cap tried (1 050). Section
+boundaries are atomic and a section is at least one chunk, so the chunk count is fixed by the
+corpus at every size and all three rows are 49 by construction.
+
+A grid stopping at 1 000 tokens would have reported "chunk size does not matter" — a conclusion
+drawn from a search space that could not have found one, the same failure as D57. The grid now
+runs to 4 000/8 000 tokens and the report says plainly that no change is adopted **because
+nothing was measured**, and that making the experiment real needs a corpus with a section longer
+than the hard cap — a corpus change, not something to smuggle in by inflating a grid.
+
+## D65 — what P9 did not do
+
+* **`SENTENCE_RERANK` was not measured**, because it has no implementation. There is nothing to
+  measure, and building a reranker before knowing whether sentence selection is a problem is the
+  speculative work §10 rule 16 forbids. D60 shows it *is* a problem for one case in fifty, which
+  is a P10 candidate, not a reason to build the feature now.
+* **The per-item cap was not measured**, because it cannot affect retrieval quality: it is a
+  provider guard, the chunker produces chunks an order of magnitude below the measured 40 949-char
+  ceiling, and lowering it would only convert a request that succeeds into one that fails. An
+  argument, not an experiment.
+* **`min_lexical` was not removed** (D58). It is a change to the gate's contract and debug
+  payload, it would invalidate P7's live tests, and it buys nothing measurable. P10/P11.
+* **The gate was not redesigned** to add a second signal to the uncorroborated branch. §12
+  question 3 reserves that for a human, and the measurement is now in front of them.

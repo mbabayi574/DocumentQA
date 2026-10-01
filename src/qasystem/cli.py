@@ -1,6 +1,6 @@
-"""Maintenance CLI: ``python -m qasystem.cli`` (plan.md P8).
+"""Maintenance CLI: ``python -m qasystem.cli`` (plan.md P8, P9).
 
-Five commands, each a thin wrapper over a function that already exists and is already tested
+Each command is a thin wrapper over a function that already exists and is already tested
 elsewhere. The CLI translates arguments and exit codes; it does not contain logic of its own,
 because logic that only runs from a terminal is logic nothing else can check.
 
@@ -8,6 +8,11 @@ Exit codes are the point of a maintenance command: ``0`` when the thing it check
 ``1`` when it is not, so a cron job or a deploy step can branch on the result without parsing
 prose. ``reconcile`` and ``check-storage`` are read-mostly and say what they found; ``rebuild``
 changes the index and says how much it restored.
+
+``eval`` and ``calibrate`` delegate to ``tests/eval/runner.py`` — the layout plan.md §7
+specifies, and the only one of the seven commands whose implementation is not in ``src/``.
+The import is deferred and the failure is reported, not raised, so a checkout without the
+eval dataset still gets a diagnostic instead of a traceback.
 """
 
 from __future__ import annotations
@@ -27,9 +32,10 @@ from qasystem.logging_setup import configure_logging
 EXIT_OK = 0
 EXIT_FAILED = 1
 
-#: The eval dataset's repo-relative location. Derived from this file rather than from the
-#: data directory, so a maintenance command works regardless of where `data/` happens to be.
-DATASET = Path(__file__).resolve().parents[2] / "tests" / "eval" / "dataset.jsonl"
+#: The eval harness's location. Derived from this file rather than from the data directory, so
+#: a maintenance command works regardless of where `data/` happens to be.
+EVAL_DIR = Path(__file__).resolve().parents[2] / "tests" / "eval"
+DATASET = EVAL_DIR / "dataset.jsonl"
 
 
 def _report(payload: dict[str, Any]) -> None:
@@ -119,53 +125,84 @@ def cmd_check_storage(settings: Settings, args: argparse.Namespace) -> int:
     return asyncio.run(run())
 
 
-def cmd_calibrate(settings: Settings, args: argparse.Namespace) -> int:
-    """Grid-search the evidence gate on the eval dataset (P9).
+def _metrics(metrics: Any) -> dict[str, Any]:
+    return {
+        "answerable": metrics.n_answerable,
+        "unanswerable": metrics.n_unanswerable,
+        "r1": round(metrics.r1, 4),
+        "r3": round(metrics.r3, 4),
+        "r5": round(metrics.r5, 4),
+        "mrr5": round(metrics.mrr5, 4),
+        "answered_on_answerable": round(metrics.answered_rate, 4),
+        "false_answers": metrics.false_answers,
+        "false_answer_rate": round(metrics.false_answer_rate, 4),
+        "gold_quoted": round(metrics.evidence, 4),
+    }
 
-    Reports the missing precondition rather than pretending: there is no dataset to search yet,
-    and a calibration run against nothing would write a file full of numbers with no evidence
-    behind them -- which is the one thing `calibrated: false` exists to prevent.
+
+def _run_eval(settings: Settings, *, calibrate: bool) -> int:
+    """Shared body of ``eval`` and ``calibrate``; the only difference is the write.
+
+    The harness lives in ``tests/`` because plan.md section 7 puts it there and because it is
+    test infrastructure rather than a shipped code path. That makes a missing or broken
+    import a checkout problem rather than a package problem, so it is reported as one.
     """
-    dataset = DATASET
-    if not dataset.exists():
+    if not DATASET.exists():
         _report(
             {
                 "calibrated": False,
                 "reason": "no eval dataset",
-                "expected": str(dataset),
+                "expected": str(DATASET),
                 "next": "author tests/eval/dataset.jsonl (plan.md section 9.1), then re-run",
             }
         )
         return EXIT_FAILED
+    if not settings.embedding_api_key and not settings.is_fake_provider:
+        _report(
+            {
+                "error": "no provider configured",
+                "message": (
+                    "the eval measures the real model; set EMBEDDING_API_KEY, or run with "
+                    "EMBEDDING_PROVIDER=fake APP_ENV=demo to check the harness only"
+                ),
+            }
+        )
+        return EXIT_FAILED
+    try:
+        if str(EVAL_DIR) not in sys.path:
+            sys.path.insert(0, str(EVAL_DIR))
+        import runner  # type: ignore[import-not-found]
+    except Exception as exc:  # a broken checkout, reported the way a broken checkout reads
+        _report({"error": type(exc).__name__, "message": str(exc), "expected": str(EVAL_DIR)})
+        return EXIT_FAILED
+
+    report = EVAL_DIR / "report.md"
+    outcome = asyncio.run(runner.run(settings, calibrate=calibrate, report=report))
     _report(
         {
-            "calibrated": False,
-            "reason": "the grid search lands in P9; the dataset exists but nothing searches it",
-            "dataset": str(dataset),
+            "report": report.name,
+            "calibrated": outcome.calibration is not None,
+            "thresholds_written": calibrate and outcome.calibration is not None,
+            "stale_leaks": outcome.stale_leaks,
+            "citation_segments_verified": outcome.citation_checks,
+            "dev": _metrics(outcome.calibration.dev) if outcome.calibration else None,
+            "held_out": _metrics(outcome.calibration.test) if outcome.calibration else None,
+            "reason": outcome.calibration_error or None,
         }
     )
-    return EXIT_FAILED
+    return EXIT_OK if outcome.calibration is not None else EXIT_FAILED
+
+
+def cmd_calibrate(settings: Settings, args: argparse.Namespace) -> int:
+    """Grid-search the gate on the eval dataset's dev split, then write it (P9 section 9.3)."""
+    del args
+    return _run_eval(settings, calibrate=True)
 
 
 def cmd_eval(settings: Settings, args: argparse.Namespace) -> int:
-    """Score the corpus against the eval dataset (P9 section 9.2)."""
-    dataset = DATASET
-    if not dataset.exists():
-        _report(
-            {
-                "reason": "no eval dataset",
-                "expected": str(dataset),
-                "next": "author tests/eval/dataset.jsonl (plan.md section 9.1), then re-run",
-            }
-        )
-        return EXIT_FAILED
-    _report(
-        {
-            "reason": "the eval runner lands in P9",
-            "dataset": str(dataset),
-        }
-    )
-    return EXIT_FAILED
+    """Score the corpus against the eval dataset, without writing thresholds (P9 section 9.2)."""
+    del args
+    return _run_eval(settings, calibrate=False)
 
 
 COMMANDS = {

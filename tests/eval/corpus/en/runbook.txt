@@ -1,0 +1,57 @@
+AURORA GATEWAY - INCIDENT RUNBOOK
+=================================
+
+Scope: this runbook is for on-call engineers handling a live Aurora Gateway incident.
+It is deliberately separate from the operator handbook, which describes how the service
+is configured rather than what to do at 03:00.
+
+SEVERITY
+--------
+SEV-1  Customer impact is ongoing: requests are failing for real tenants.
+SEV-2  The service is degraded but requests still succeed for most tenants.
+SEV-3  A single tenant is affected.
+
+A SEV-1 or SEV-2 opens an incident immediately. Severity is never lowered to tidy the
+queue; it is changed when the impact changes.
+
+FIRST RESPONSE
+--------------
+1. Acknowledge the alert and take the incident channel.
+2. Read the error code in the alert. Each code below has one documented cause.
+3. Collect diagnostics BEFORE any restart or rollback.
+4. Only then decide between rollback and forward fix.
+
+DIAGNOSTICS
+-----------
+Run `auroractl diag collect --last 30m` and attach the archive to the incident. This is
+the single most useful artefact in an incident review, and it cannot be recovered
+later: the ring buffer holds thirty minutes and then overwrites itself.
+
+ERROR CODES
+-----------
+AUR-1042  Session pool exhausted. The gateway reached its ceiling of concurrent
+          sessions and refused further work. Adding capacity is the fix; restarting
+          only clears the symptom and the pool refills within seconds.
+
+AUR-2291  Upstream TLS handshake failed. The gateway could not establish TLS with its
+          upstream dependency. Check the upstream certificate's validity window before
+          suspecting the gateway; an expired upstream certificate produces this code
+          exactly, and the gateway's own certificate is rarely the problem.
+
+AUR-3310  Disk pressure on the spool volume. The spool is where in-flight requests are
+          staged. At ninety percent full the gateway starts shedding load.
+
+ESCALATION
+----------
+Page the on-call engineer with `auroractl page --rotation gateway`. Do not page by
+message: a page is acknowledged within five minutes or re-fired, and a chat message is
+seen whenever someone happens to read it.
+
+ROLLBACK
+--------
+`auroractl rollback --to previous` restores the previous release. A rollback is the
+default response to a SEV-1 whose cause is a release, and a forward fix at 03:00 is a
+choice that has to be defended.
+
+After a rollback, verify with `auroractl status` and leave the incident open until
+metrics are steady for fifteen minutes.

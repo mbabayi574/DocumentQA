@@ -127,8 +127,10 @@ def test_defaults_match_plan(settings_factory) -> None:
     assert settings.candidates_n == 30
     assert settings.top_k == 5
     assert settings.rrf_k == 60
-    assert settings.dense_weight == pytest.approx(0.7)
-    assert settings.lexical_weight == pytest.approx(0.3)
+    # §9.4 experiment 1 measured these on the eval dev split; the superseded 0.7/0.3 is
+    # in docs/eval_report.md and D59 rather than left as a comment that can drift.
+    assert settings.dense_weight == pytest.approx(0.9)
+    assert settings.lexical_weight == pytest.approx(0.1)
     assert settings.max_answer_sentences == 5
     assert settings.chroma_path == Path("./data/chroma")
     assert settings.sqlite_path == Path("./data/qasystem.db")

@@ -95,18 +95,26 @@ Every value was measured on this machine against the live service. Re-run
 | **32 items/request is the throughput peak** (29.7 chunks/s; 23.6 at 64, 28.2 at 128) | `MAX_ITEMS_PER_BATCH=32`. Do not "optimise" this upward. |
 | **Cost per character falls steeply with item length**: 105 ms per 1 000 chars at 500-char items, 36 ms at 2 000, 11 ms at 8 000 — **2.9x** then **9.5x** cheaper than 500 | Chunk size is the biggest cost lever, but it trades against retrieval precision. **P9 experiment, not a change** — `CHARS_PER_TOKEN=1.5` sizes for the densest text (tables), so real chunks average ~500 chars against a 40 949-char budget. |
 | **120 req/min; real ingest needs 31 req/min** | `RATE_LIMIT_PER_MIN=100` leaves headroom. Ingest cost is dominated by request count, not characters. |
-| **Multilingual: English question → Persian source with no translation step** — **verified live, with a cost** | No language routing, no translation, no per-language collection. One collection serves both languages; `detect_language` is a stored label, not a routing decision. Live-verified: an English question retrieves and is answered from the Persian PDF. **But** `token_coverage` counts *shared tokens*, so coverage is structurally 0 for a cross-lingual hit — the gate needs an uncorroborated `dense_only` branch (D47) and the answerer needs a positional fallback (D48), and that branch carries a measured **1-in-9 false-answer rate** the cosine cannot separate from a real one (D47). Measured again on the full corpus: cross-lingual retrieval then **finds the right chunk and loses it to the lexical arm** — the correct Persian chunk is dense rank 2 at similarity 0.539 with *zero* lexical contribution, while English chunks that share incidental words collect lexical ranks 1–19 at similarity 0.547 and overtake it. No threshold separates them (D55). See §12. |
+| **Multilingual: English question → Persian source with no translation step** — **verified live, with a cost** | No language routing, no translation, no per-language collection. One collection serves both languages; `detect_language` is a stored label, not a routing decision. Live-verified: an English question retrieves and is answered from the Persian PDF. **But** `token_coverage` counts *shared tokens*, so coverage is structurally 0 for a cross-lingual hit — the gate needs an uncorroborated `dense_only` branch (D47) and the answerer needs a positional fallback (D48), and that branch carries a measured **1-in-9 false-answer rate** the cosine cannot separate from a real one (D47). After P9's calibration `min_dense_alone` sits at 0.66, and the real cross-lingual hit measures 0.513-0.547 while the hardest unanswerable dev case measures 0.609 — so the branch is safe on the eval corpus and refuses the fixture corpus's cross-lingual case, which is §12 question 3 measured on both sides (D61). Measured again on the full corpus: cross-lingual retrieval then **finds the right chunk and loses it to the lexical arm** — the correct Persian chunk is dense rank 2 at similarity 0.539 with *zero* lexical contribution, while English chunks that share incidental words collect lexical ranks 1–19 at similarity 0.547 and overtake it. No threshold separates them (D55). See §12. |
 | **The `index` response field is a permutation, but the API does not guarantee it** | Validate it is a permutation of `0..n-1`; otherwise use response order and log a warning. Cheap insurance against silently mislabelled vectors (D21). |
 | **`Retry-After` is absent on 429** | Capped exponential backoff with jitter is the real path. Honour the header if a provider ever sends it. |
 | **403 for a model the account cannot use**, with the allowed IDs in the message | `EmbeddingAuthError` carries the allowed list. 401/403 and other 4xx fail fast — never retried. |
 | **A whole fixture corpus ingests in 33 requests** | `rebuild` reads `embedding_cache` and re-upserts, so restoring dense search costs **zero** API calls (I10). |
 
-**Retrieval reality check (D30).** On the committed corpus, dense-only is
-R@1 0.67 / R@3 0.83 / R@5 0.92, lexical-only R@1 0.42, hybrid R@3 0.92. Two consequences:
-dense similarity alone is **not** accurate enough to answer from, which is what makes the
-gate load-bearing; and **`DENSE_WEIGHT=0.7` is a starting point, not a tuned constant** —
-at 12 questions, one question is worth 0.083 R@1, so P9 must decide it on the real
-dataset. An earlier `R@1 = 1.000` figure did not reproduce and is withdrawn.
+**Retrieval reality check, superseded by P9 (D30 → D59).** The 12-question figures are
+withdrawn and replaced by the 50-question eval in `docs/eval_report.md`: hybrid R@1 0.76 /
+R@3 0.95 / R@5 0.95 / MRR@5 0.846, dense-only R@1 0.68, lexical-only R@1 0.58. `DENSE_WEIGHT`
+is now **0.9**, measured on the eval dev split and adopted because it improved dev on all four
+metrics without hurting held-out (D59). Dense similarity alone is still not accurate enough
+to answer from, which is what makes the gate load-bearing.
+
+**The measured limit of the headline property (D61).** §2's cross-lingual claim does not hold as
+stated. The same English question is **refused** against a 7-chunk Persian index and **answered**
+against a 49- or 1225-chunk one, with `max_dense` flat at 0.513–0.547 across all three. What
+changes is `token_coverage` — 0.00 when nothing else in the corpus shares a word, 0.40–0.50 when
+an unrelated document does. So cross-lingual retrieval here depends on incidental lexical
+corroboration from other documents rather than on the model's cross-lingual ability, and no
+threshold on cosine can change that. See §12 question 3.
 
 ---
 
@@ -313,12 +321,14 @@ MAX_CHARS_PER_ITEM=20000             # measured ceiling 40949 -> 2.05x margin
 MAX_ITEMS_PER_BATCH=32               # measured throughput peak
 RATE_LIMIT_PER_MIN=100               # measured ceiling 120; real ingest needs 31
 CANDIDATES_N=30  OVERFETCH=2  TOP_K=5  RRF_K=60
-DENSE_WEIGHT=0.7  LEXICAL_WEIGHT=0.3 # starting point only; P9 decides (see §2)
-# config/thresholds.json (keyed on model_id; a mismatched file is refused):
-GATE min_dense=0.47  min_dense_alone=0.50  min_coverage=0.25  min_lexical=0.80
-#   min_coverage_high=0.50  min_sentence_overlap=0.15   calibrated=false
-#   Measured live: answerable max_dense 0.501-0.631, unanswerable 0.359-0.451.
-#   The previous guess of 0.62 sat INSIDE the answerable range and was dead (D47).
+DENSE_WEIGHT=0.9  LEXICAL_WEIGHT=0.1 # measured on the eval dev split; hybrid beats both
+#   single arms, so the lexical arm earns its 0.1 (D59)
+# config/thresholds.json — CALIBRATED by `make calibrate` on the eval dev split:
+GATE min_dense=0.52  min_dense_alone=0.66  min_coverage=0.40  min_lexical=0.80
+#   min_coverage_high=0.80  min_sentence_overlap=0.15   calibrated=true  version=2
+#   Result: 0 false answers of 7 unanswerable on dev, 0 of 5 held out; 0.91/0.93 answered on
+#   answerable. 50 questions over six documents, so these are coarse operating points and the
+#   file records the split, the class balance and the evidence limit alongside the numbers.
 ```
 
 ---
@@ -365,6 +375,7 @@ Gates passed; `docs/DECISIONS.md` has the evidence. These constraints must not r
 | **P7** retrieval + gate + answering | `fusion.py` weighted RRF over the **candidate union**, `gate.py` auditable two-branch rule keyed on `model_id`, `service.py` retrieve → gate → answer, `sentences.py` + `extractive.py` selection only | `normalize_for_index` was **deleting newlines** (category `Cc`), fusing the last word of every line onto the first word of the next — every FTS token and every `chunk_hash` for multi-line text was wrong (D37); ranks are 1-based everywhere, so RRF never divides by `k` for the best hit (D38); a weight of **0 disables** an arm, or §9.2's single-arm baselines would silently mix two systems (D39); the gate judges the whole window and only `top_k` sizes the answer (D40); coverage is the max over candidates, so a fusion bug cannot present as a gate refusal (D41); thresholds for another model are a hard `ConfigError`, a missing file only falls back to uncalibrated defaults (D42); Persian coverage loses 0.29 to Ezafe suffixes, the largest known weakness of the lexical arm (D43) |
 | **P8** API + operations | `api/deps.py` builds the whole graph once and owns L2/L9; `api/routes.py` thin verbs; `api/app.py` lifespan + one error envelope + request-id middleware; `api/schemas.py` is the OpenAPI contract; `cli.py`; `scripts/smoke_test.sh` | SQLite connections were **thread-bound**, so a store built in the lifespan and used from a request thread raised `ProgrammingError` and **every endpoint 500'd** — invisible to 480 offline tests (D49); `filelock.is_locked` is thread-local, so `/ready` reported the lock unheld and 503'd forever (D50); `SQLITE_PATH`/`CHROMA_PATH` were configured and silently ignored (D52); the `Embedder` port declared identity as mutable when every implementation exposes it read-only |
 | **P8-live** whole-project live verification | `tests/integration/test_system_live.py`: the full 1225-chunk fixture corpus, the CLI against the real provider, I10 measured on real vectors | **no new defects** — the gaps were verification gaps, not code gaps. But two measurements P9 needs and no offline test can produce: query latency is **one embedding call** (13–21ms of our work against 286–1230ms of network, P50 410ms / P95 1.8s), and the cross-lingual miss is caused by the **lexical arm**, not the gate — the correct Persian chunk is dense rank 2 at sim 0.539 with zero lexical contribution while wrong English chunks at 0.547 collect lexical ranks 1–19 and overtake it (D54, D55) |
+| **P9** eval + calibration | `tests/eval/` (runner, 50-question bilingual dataset, 6-document corpus, 37 offline tests), `make eval` / `make calibrate`, `docs/eval_report.md`, `config/thresholds.json` at `calibrated: true` | The gate's verdict is **weight-independent** (verified: 0 verdict changes across 11 weight points) because every signal is a maximum over the candidate set — which is what makes single-arm baselines and the weight sweep possible at all. `DENSE_WEIGHT` measured to 0.9/0.1 (D59). A **false-answer rate of 0.00 hid a whole failure mode**: answered questions citing a document that does not contain the answer, 12% of gold facts unquoted, now measured as `gold quoted` and named case by case with its cause (D60). The headline cross-lingual property **does not hold as §2 states it** — the same question is refused on 7 chunks and answered on 1225, with `max_dense` flat across both (D61). Two harness self-inflicted errors, both recorded: a grid whose own bounds reported "no feasible point" when 26 040 feasible points existed (D57), and a latency measurement that reported 11 ms because the query cache was warm (D63) |
 | **P7-live** live verification | 14 live tests (`RUN_LIVE=1`), FakeEmbedder → real BGE-M3 | a Latin word glued to Persian script was **unmatchable** — `\w` spans both scripts, so `embedding` never existed as a token, breaking the lexical arm and the coverage signal (D45); `embed_requests` counted `embed()` calls not HTTP requests, a **32× error** in the number §2 and §9.2 report (D46); the gate **could not authorise cross-lingual retrieval** because coverage is structurally 0 there, so the dense arm needed an uncorroborated branch (D47) — and then the *answerer* refused the same evidence for the same reason until it got a positional fallback (D48); the shipped `min_dense = 0.62` was measured to sit **inside** the answerable range, so the dense branch was dead (D47) |
 | **P6** ingestion | `diff.py` multiset diff, `service.py` add/replace/delete/reconcile, all 12 gate tests | embedding runs **outside** the write lock and before any version exists, so an embed failure costs nothing (D33); VERIFY refuses a partial vector write; a failed version **keeps** its row as `failed` while a superseded one is fully purged (D35); a best-effort cleanup step needs its own assertions, because no correctness test can fail when it is deleted (D34); `embed_requests` is a delta and `reconcile` returns the plan it **found** (D36) |
 
@@ -568,7 +579,7 @@ error body.
 refuses to start (L2); `scripts/smoke_test.sh` passes: add → query → edit → query → delete
 → query.
 
-### P9 — Evaluation and gate calibration
+### P9 — Evaluation and gate calibration — **DONE, see §8**
 
 **9.1 Corpus and dataset — committed, deterministic, bilingual.** Author
 `tests/eval/corpus/` from scratch: ~6 documents of 1–3 KB covering md, txt, pdf, in both
@@ -611,6 +622,22 @@ after the first run.
 
 **Gate:** `docs/eval_report.md` committed with real numbers for hybrid vs dense-only vs
 lexical-only; README quotes them; thresholds calibrated and committed; invariants green.
+
+**Status: done**, with these deviations, each recorded:
+
+* **The corpus is 6 documents, not ~6 of 1-3 KB authored in every format.** Four are authored
+  (md/txt × en/fa); the two PDFs are the generated `limits.pdf` and a **symlink** to the
+  committed `fa/ai-engineer.pdf`, because this machine has no Arabic-capable font and §9.1 names
+  that fixture as the source of a real Persian text layer.
+* **`R@k` requires *every* gold phrase in the window**, so a multi-section question is not
+  scored as answered on one of its facts. §9.1's schema is the single-gold case of this.
+* **A metric was added**: `gold quoted`. §9.2's list measures retrieval, refusal and citation
+  *validity*, and none of them notices an answered question citing the wrong document (D60).
+* **The weight sweep runs a real `retrieve()` per point** rather than re-sorting one pass's
+  candidates, because `fuse()` drops an arm's exclusive candidates at weight 0 and a re-sort
+  would measure a system this code cannot build.
+* **Latency is measured on a throwaway index every run.** Reusing the run's own index reported
+  11 ms, because a second `make eval` finds every question already cached (D63).
 
 ### P10 — Hardening
 
@@ -708,13 +735,13 @@ components are important to us." This phase makes the work easy to review.
 - [ ] Failed updates never expose a partial version (I3)
 - [ ] Chroma local and persistent; restart persistence verified; single-instance lock
       enforced; `rebuild` restores dense search with zero API calls (I10)
-- [ ] Hybrid retrieval measured against dense-only and lexical-only baselines
+- [x] Hybrid retrieval measured against dense-only and lexical-only baselines
 - [ ] Answers are exact source excerpts; every citation mechanically verified (I6, I7)
-- [ ] Unanswerable questions → `insufficient_information`, no citations
+- [x] Unanswerable questions → `insufficient_information`, no citations
 - [ ] No GUI dependency; stable OpenAPI; structured errors; no secrets exposed (I8)
-- [ ] `make check` clean **and a fresh `git clone` green**
-- [ ] `docs/eval_report.md`, `config/thresholds.json`, `docs/DECISIONS.md` committed;
-      README complete and honest about limits
+- [x] `make check` clean **and a fresh `git clone` green**
+- [x] `docs/eval_report.md`, `config/thresholds.json`, `docs/DECISIONS.md` committed;
+      README quotes the measured numbers and states the limits
 
 Reviewer questions, each answered by a named test:
 
@@ -739,17 +766,26 @@ Reviewer questions, each answered by a named test:
 
 ## 12. Open questions for the human
 
-1. **Fusion weights** — §2 measured 0.9/0.1 ahead of the 0.7/0.3 default, but at 12
-   questions that is not decisive. Confirm P9's dev split should decide it rather than
-   adopting the higher value now. `retrieve()` already accepts both weights so §9.2 can
-   measure dense-only and lexical-only without touching config (D39).
-1b. **Persian morphology** — coverage loses 0.29 to Ezafe suffixes (`خطایی` vs `خطا`), with
-   no stemmer in place (D43). P9's Persian questions must include inflected terms or the eval
-   will report morphology mismatch as retrieval quality. Decide whether a light Persian
-   stemmer is in scope before §9.1 is authored.
-2. **Chunk size** — raising `CHUNK_TARGET_TOKENS` toward 2 000-char chunks is worth ~2.9×
-   throughput per character (9.5× at 8 000). Confirm it stays a P9 experiment, since it
-   trades against retrieval precision.
+1. **Fusion weights — ANSWERED, no decision needed.** P9's dev split decided: **0.9/0.1** is
+   better than 0.7/0.3 on R@1, R@3, R@5 and MRR@5 and worse on none of the held-out numbers, and
+   hybrid beats *both* single arms, so the lexical arm earns its 0.1. Adopted in `config.py`
+   (D59). A side finding worth knowing: the gate's verdict is completely weight-independent
+   while both arms are non-zero, because every signal is a maximum over the candidate set.
+1b. **Persian morphology — ANSWERED for the eval, still open for the code.** The dataset
+   includes deliberately inflected Persian (`چه کدام` with Ezafe, clitic `-ی`, an inflected
+   participle, a ZWNJ compound) and the questions are answerable anyway, because the *gate*
+   leans on density and `min_coverage` is 0.40 rather than 0.25 — enough slack that losing
+   0.29 to an Ezafe suffix no longer decides the case. No stemmer was added: it is a new
+   dependency and a new subsystem for a weakness the calibration absorbed, and §10 rule 16 says
+   do not add one until it is a measured problem. Revisit if `gold quoted` shows Persian cases
+   failing at a higher rate than English ones — it does not (both are inside the same 0.88).
+2. **Chunk size — experiment attempted, and it cannot discriminate on this corpus (D64).** The
+   eval corpus is 49 sections in 49 chunks with a longest section of 635 characters, below the
+   smallest hard cap tried, so section-boundary atomicity fixes the chunk count at every size
+   and all three rows are identical *by construction*. **No change is adopted, because nothing
+   was measured.** The cost half of the trade-off stands: 9.5× cheaper per character at 8 000
+   than at 500. Making the experiment real needs a corpus with a section longer than the hard
+   cap, which is a corpus change. Still a human call on whether that is worth authoring.
 3. **Cross-lingual retrieval versus the false-answer target — the one that needs a decision.**
    A live run measured that these cannot both hold at 5%: admitting an English question answered
    from a Persian source requires accepting uncorroborated dense hits, and one question whose answer
@@ -762,5 +798,37 @@ Reviewer questions, each answered by a named test:
    language-aware signal.
    Recommended: **(c)**, with **(b)** as the interim. Also note the corpus is 84% one Persian book,
    so the measured bands are not balanced; P9's own corpus decides this properly.
-4. **Live API during P9** — calibration and sweeps need `RUN_LIVE=1` and the real token.
-   Everything else runs offline. 14 live tests now exist and pass.
+
+   **P9 has now measured both sides on a balanced corpus, and the answer is that (a) and (b) are
+   the same choice (D61).** The eval corpus gives 0 false answers on both splits — so the 1-in-9
+   of D47 does **not** reproduce once every question has a known answer and the corpus is not
+   84% one book. But the price is the headline property: the same English question is **refused**
+   against a 7-chunk Persian index and **answered** against 1225 chunks, with `max_dense` flat at
+   0.513–0.547 across all three. What changes is `token_coverage` — 0.00 when nothing else in the
+   corpus shares a word, 0.40–0.50 when an unrelated document does. Cross-lingual retrieval here
+   works when another document lends it lexical corroboration, and not otherwise.
+
+   The arithmetic that closes off the alternatives: to refuse the hardest unanswerable dev case
+   (`n03`, 0.609) `min_dense_alone` must exceed 0.609, and the real cross-lingual hits measure
+   0.513–0.547. The branch cannot be both reachable and safe, and the eval dataset's hardest
+   cross-lingual case (0.618) and hardest unanswerable case (0.609) are 0.009 apart, which the
+   grid cannot resolve either. **So (a) and (b) are not alternatives — holding a 0% false-answer
+   rate *is* giving up the uncorroborated cross-lingual branch.** What is left is (c): give that
+   branch a second signal. The two candidates the data points at are (i) a cross-lingual lexical
+   probe — transliterate or embed the *other* language's candidate and re-ask — and (ii) accept
+   that the branch is unsafe and drop it, documenting cross-lingual as unsupported. Neither is a
+   tuning change, which is why this is still the one question that needs a human.
+4. **Live API during P9** — RESOLVED. `make eval` and `make calibrate` both take `RUN_LIVE=1`
+   and the real token; everything else runs offline. A full run is ~2 minutes and ~200 provider
+   requests, of which ~150 are the §9.4 chunk-size sweep and 56 are the fresh-index latency
+   measurement. 22 live tests now exist and pass, including `tests/integration/test_eval_live.py`
+   which re-derives the calibration's two headline claims rather than restating them.
+
+5. **New, and it needs a decision too: a false-answer rate of 0% is not the same as being right
+   (D60).** On the held-out split the system answers 93% of answerable questions with 0 false
+   answers and quotes **88%** of the gold facts in the text it cites. The 12% it misses are
+   named in `docs/eval_report.md` with their cause: three cases cite the wrong document, one is
+   a `top_k` truncation, one is a sentence the overlap bar correctly refuses. If the review
+   criterion is "a citation asserts its source supports the answer", then `gold quoted` is the
+   number to hold this system to, and it is a lower bar than the 0.93 the current metric
+   suggests.

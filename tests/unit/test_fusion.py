@@ -86,7 +86,11 @@ def test_ties_break_deterministically_by_chunk_id() -> None:
 
 
 def test_the_weights_actually_steer_the_order() -> None:
-    """A rank-1 lexical hit must not be able to beat a rank-1 dense hit at 0.7/0.3."""
+    """A rank-1 lexical hit must not outrank a rank-1 dense hit while dense outweighs it.
+
+    The weights here are arbitrary and are not the shipped ones: this is a property of
+    `fuse`, and §9.4 experiment 1 is what measured the shipped pair.
+    """
     fused = fuse(ranked("d"), ranked("l"), dense_weight=0.7, lexical_weight=0.3, k=K)
     assert fused[0][0] == "d"
     flipped = fuse(ranked("d"), ranked("l"), dense_weight=0.3, lexical_weight=0.7, k=K)
