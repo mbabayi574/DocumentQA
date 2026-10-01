@@ -12,9 +12,11 @@ from qasystem.config import Settings
 REDACTED = "***REDACTED***"
 
 
-def _scrub(secrets: tuple[str, ...], text: str) -> str:
+def scrub(secrets: Iterable[str], text: str) -> str:
+    """Replace every known secret in ``text``. Public: error messages need it too (I8)."""
     for secret in secrets:
-        text = text.replace(secret, REDACTED)
+        if secret:
+            text = text.replace(secret, REDACTED)
     return text
 
 
@@ -28,12 +30,12 @@ class SecretRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if not self._secrets:
             return True
-        record.msg = _scrub(self._secrets, str(record.msg))
+        record.msg = scrub(self._secrets, str(record.msg))
         if isinstance(record.args, tuple):
             # Scrub only str args: str() on an int arg would break the format spec
             # (httpx logs 'HTTP Request: ... "%s %d %s"' with an int status code).
             record.args = tuple(
-                _scrub(self._secrets, arg) if isinstance(arg, str) else arg for arg in record.args
+                scrub(self._secrets, arg) if isinstance(arg, str) else arg for arg in record.args
             )
         return True
 

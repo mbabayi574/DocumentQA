@@ -134,3 +134,24 @@ def test_defaults_match_plan(settings_factory) -> None:
     assert settings.sqlite_path == Path("./data/qasystem.db")
     assert settings.max_upload_mb == 20
     assert settings.sentence_rerank is False
+
+
+def test_embedding_client_defaults_match_the_measured_provider_caps(settings_factory) -> None:
+    """§2.1: 200 000 chars/request, 120 req/min, and a per-item cap below the 45k failure."""
+    settings = settings_factory(**REMOTE)
+    assert settings.max_chars_per_request == 160_000
+    assert settings.max_chars_per_item == 20_000
+    assert settings.max_items_per_batch == 32
+    assert settings.rate_limit_per_min == 100
+    assert settings.max_retries == 5
+    assert settings.request_timeout_s == 30
+
+
+def test_a_non_positive_per_item_cap_is_rejected(settings_factory) -> None:
+    with pytest.raises(ConfigError, match="MAX_CHARS_PER_ITEM"):
+        settings_factory(**{**REMOTE, "max_chars_per_item": 0})
+
+
+def test_the_per_item_cap_may_not_exceed_the_request_cap(settings_factory) -> None:
+    with pytest.raises(ConfigError, match="MAX_CHARS_PER_ITEM"):
+        settings_factory(**{**REMOTE, "max_chars_per_item": 200_000})

@@ -282,3 +282,75 @@ remove complexity.
 **Two bugs the refactor itself introduced, caught by the suite and fixed:** an inverted
 keep/drop test that deleted ZWNJ (the D8 behaviour silently broke), and a test asserting
 `ai-engineer.pdf`'s blank page was page 1 when it is page 2.
+
+---
+
+## D21 — the embedding client trusts `index` only when it is a permutation (D21)
+
+P4's only real design decision. The provider returns an `index` field per vector, and
+the obvious implementation is `vectors[data[i]["index"]] = data[i]["embedding"]`.
+
+**Measured reason not to.** §2.1 recorded that `Gemini-embedding-001` returns
+`index: [0,0,0,0]` for a 4-item request. That implementation would put one vector in
+slot 0 three times, drop slot 3, and leave a `KeyError` or a silently mislabelled
+result. The symptom would appear as bad retrieval quality, not as a crash, so it would
+survive a long time before anyone looked.
+
+**Decision.** `index` is used only when it is a genuine permutation of `0..n-1`. Any
+other shape — repeated values, missing field, wrong length — falls back to response
+order and logs a warning naming the field. Order-preservation is the `Embedder` port's
+contract, so the fallback is the safe answer, not a degraded one.
+
+**Verified by mutation, not just by assertion.** Forcing the permutation check to always
+pass makes `test_a_non_permutation_index_falls_back_to_response_order` and
+`test_a_missing_index_field_falls_back_to_response_order` fail. Forcing `_retryable` to
+accept every 4xx makes the 401 and 400 fail-fast tests fail.
+
+## D22 — the per-item cap is enforced locally, so the provider's context error is a backstop (D22)
+
+§2.1 measured that `Bge-m3` accepts a 40 000-char item and rejects a 45 000-char one with
+`maximum context length is 8192 token`. `MAX_CHARS_PER_ITEM=20000` leaves 2× headroom.
+
+The first draft of the live probe tried to reproduce the 8192-token error by sending a
+100 000-char item. It could not: `plan_batches` raises first. That is the correct order —
+we never spend a request to learn something config already knows. The live test now
+asserts the **local** refusal, and the provider's context error remains covered by a
+`respx` unit test as the backstop it actually is.
+
+A single oversized item raises `ConfigError`-flavoured `ValueError` rather than being
+truncated, because a truncated vector stands for text no citation can point at (I6).
+
+## D23 — `_scrub` became public `scrub` so error messages are redacted too (D23)
+
+`logging_setup._scrub` existed for log records only. The client builds error messages
+from the provider's response body, and a provider that echoes an `Authorization` header
+would turn our error into an I8 leak. Rather than write a second scrubber, `_scrub` is now
+`scrub(secrets, text)` and the client calls it on every provider message before that
+message reaches an exception. `test_the_token_never_appears_in_an_error_body` pins it with
+a body that literally contains the token; the live probe repeats the check against a real
+401.
+
+**Error mapping, one place.** 401/403 → `EmbeddingAuthError` (403's message is parsed for
+the `Allowed:` list into `details["available_models"]`, §2.1). 429/5xx/timeouts → retried,
+then `EmbeddingUnavailableError`. Any other 4xx → `EmbeddingUnavailableError` immediately,
+carrying the provider's text. That last choice reuses an existing error rather than
+adding a class for one status code: a 400 from this provider means *we* built a bad
+request, and the provider's own words are the useful part of the message.
+
+## D24 — live provider measurements re-taken at P4 (D24)
+
+`RUN_LIVE=1 uv run pytest tests/integration/test_embed_live.py` re-verified §2.1 on
+2026-10-01, 6 passed:
+
+| Claim | Live result |
+|---|---|
+| `GET /v1/models` ids | `Gemini-embedding-001`, `Embedding-3-Small`, `Bge-m3`, `Embedding-3-Large` |
+| `Bge-m3` dimension | **1024**, matching §2.1 and §2.2a |
+| Vectors arrive L2-normalized | ‖v‖ within 1e-3 of 1.0, so ingest skips normalizing |
+| Batch order preserved for 4 distinct texts | 4 distinct vectors returned in order |
+| A 20 000-char item | accepted, 1024 dims |
+| A 100 000-char item | refused locally, no request sent (D22) |
+| A wrong token | 401 → `EmbeddingAuthError`, token absent from the message |
+
+Note the model list comes back in a **different order** each call. Nothing may depend on
+its order; the client only does a membership test.

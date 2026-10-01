@@ -54,6 +54,8 @@ class Settings(BaseSettings):
 
     # --- embedding client ---
     max_chars_per_request: int = 160_000
+    # §2.1: Bge-m3 takes 40_000 chars but fails at 45_000 with an 8192-token context error.
+    max_chars_per_item: int = 20_000
     max_items_per_batch: int = 32
     rate_limit_per_min: int = 100
     request_timeout_s: float = 30
@@ -100,6 +102,10 @@ class Settings(BaseSettings):
             problems.append("MAX_UPLOAD_MB must be positive")
         if self.max_items_per_batch <= 0:
             problems.append("MAX_ITEMS_PER_BATCH must be positive")
+        if self.max_chars_per_item <= 0:
+            problems.append("MAX_CHARS_PER_ITEM must be positive")
+        if self.max_chars_per_item > self.max_chars_per_request:
+            problems.append("MAX_CHARS_PER_ITEM must be <= MAX_CHARS_PER_REQUEST")
         if self.embedding_dimension is not None and self.embedding_dimension <= 0:
             problems.append("EMBEDDING_DIMENSION must be positive when set")
         if self.chunk_target_tokens <= 0:
