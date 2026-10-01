@@ -468,3 +468,107 @@ third parameter on `rebuild`, all to satisfy a number. The file is one cohesive
 repository over one SQLite database with a one-line docstring per method; splitting it
 would be reorganizing rather than simplifying. P11 revisits this with the whole codebase
 in view.
+
+---
+
+## D30 — live measurements, and a correction to §2.2a's retrieval claim (D30)
+
+`RUN_LIVE=1 uv run python scripts/measure_provider.py` re-measured the provider and,
+more importantly, re-measured **retrieval on the committed fixtures** with chunking-
+independent phrase gold (plan.md §9.1's design) instead of a document-level label.
+
+**§2.2a's `R@1 = 12/12, MRR = 1.000` is not reproducible and is withdrawn.** On the
+committed corpus, 12 answerable questions, gold = an exact phrase that must appear in
+the retrieved chunk:
+
+| strategy | R@1 | R@3 | R@5 | MRR@5 |
+|---|---|---|---|---|
+| dense only | 0.67 | 0.83 | 0.92 | 0.757 |
+| lexical only | 0.42 | 0.67 | 0.75 | 0.531 |
+| hybrid 0.9/0.1 | 0.67 | **0.92** | 0.92 | **0.764** |
+| hybrid 0.8/0.2 | 0.67 | 0.83 | 0.92 | 0.757 |
+| hybrid 0.7/0.3 (plan default) | 0.67 | 0.75 | 0.83 | 0.715 |
+| hybrid 0.5/0.5 | 0.67 | 0.75 | 0.83 | 0.729 |
+| hybrid 0.3/0.7 | 0.67 | 0.67 | 0.75 | 0.688 |
+
+The old figure came from 75 chunks across three small documents with no phrase gold.
+The committed corpus is 1 225 chunks and one 393k-char book is **84% of it**, which is a
+different measurement. The dimension (1024) and the cross-lingual behaviour are
+unaffected; only the retrieval-quality claim changes.
+
+**What the numbers say, and what they do not authorise.**
+
+1. **Hybrid helps only at low lexical weight.** 0.9/0.1 lifts R@3 from 0.83 to 0.92 and
+   MRR from 0.757 to 0.764; 0.7/0.3 *loses* R@3 (0.75) and R@5 (0.83) against dense
+   alone. Lexical's own R@1 is 0.42, so at 30% weight its noisy top-1 displaces correct
+   dense hits. The plan's own framing — "treat 0.7/0.3 as a baseline to evaluate, not a
+   truth" — is vindicated, and the baseline looks too high.
+2. **The default is *not* being changed on this evidence.** 12 questions means one
+   question is worth 0.083 R@1, and the R@3 gap is two questions. Tuning a shipped
+   default on that is exactly the unjustified claim §9.3b warns about. `DENSE_WEIGHT`
+   stays 0.7 until P9's 50-question dev split can decide it, and this table is the first
+   thing that split should reproduce.
+3. **Document size skews dense retrieval.** On a corpus capped at 40 chunks per
+   document, R@1 is 0.75; on the full corpus it is 0.67. One query moves from rank 6 to
+   rank 39 purely because one document grew. This is a direct argument for P7's
+   over-fetch and for the evidence gate not trusting dense similarity alone.
+
+**A measurement bug worth recording.** The first version of this comparison fused
+*full-corpus* dense ranks against the top-30 lexical hits and reported hybrid as worse
+than dense on every metric. plan.md §7.1 fuses the **union** of dense top-60 and lexical
+top-30. Fusing 1 225 ranks lets a single rank-1 lexical hit outrank a correct dense hit,
+which measures a system nobody is going to build. The table above is the §7.1-faithful
+version. The lesson: a measurement of the wrong system is worse than no measurement,
+because it looks like a finding.
+
+**Provider facts, re-measured and now tighter than §2.1:**
+
+| Claim | §2.1 | Measured now |
+|---|---|---|
+| `Bge-m3` dimension | 1024 | 1024 |
+| Vectors L2-normalized | ‖v‖ = 1.0000 | min 1.000000, max 1.000000 |
+| Single-item ceiling | 40 000 ok, 45 000 fails | **40 949** (binary search, 15 probes) |
+| `MAX_CHARS_PER_ITEM=20000` margin | "2x headroom" | **2.05x** — keep |
+| Optimal items per request | 32 (assumed) | **32** — measured peak, 29.7 chunks/s vs 23.6 at 64 |
+| Sustained ingest rate | not measured | 1 025 chunks / 33 requests, 8 006 chars/s, 31 req/min |
+
+`MAX_ITEMS_PER_BATCH=32`, `MAX_CHARS_PER_ITEM=20000` and `RATE_LIMIT_PER_MIN=100` are all
+confirmed by measurement rather than assumption. The 60-second burst cap and the 100/min
+limiter leave headroom against a measured 31 req/min of real ingest work.
+
+**The largest inefficiency found is chunk size, not batching.** At 500-char chunks the
+measured cost is 66 ms per 1 000 chars; at 2 000-char items it is ~11 ms per 1 000 chars —
+roughly **6x cheaper per character**. `CHARS_PER_TOKEN = 1.5` sizes chunks for the
+densest measured text (tables), so the real corpus averages 498 chars against a 40 949-char
+budget. Raising it trades throughput against retrieval precision, which is a P9
+experiment on the proper dataset, not a change to make on a 12-question spot-check. The
+harness for that experiment now exists: `scripts/measure_provider.py` caches fixture
+vectors on disk, so a chunk-size or weight sweep costs no API calls after the first run.
+
+## D31 — a fixture the plan called committed was git-ignored (D31)
+
+`plan.md` §2.3 lists `fa/justforfun_book_a4.pdf` as **"Committed. 393 534 chars of
+Persian"**, and it is the only proof that NFKC is required. `.gitignore` excluded it.
+
+Consequence, confirmed by cloning the repository and running the suite there: **two
+tests failed with `FileNotFoundError`** on any clean checkout, while the working tree —
+which always had the file — was green throughout P2, P3 and P5.
+
+```
+test_persian_book_is_readable_after_extraction         FileNotFoundError
+test_known_limitation_some_lines_lose_their_spaces     FileNotFoundError
+```
+
+The file is now tracked. 749 KB is a fair price for the NFKC evidence and for a test that
+pins the documented lost-space limitation.
+
+**The lesson is the reason it went unnoticed for four phases.** Every `make check` ran
+against the working tree, and the working tree was correct. Nothing was wrong with the
+code; the *repository* was inconsistent with its own documentation. `plan.md` P11 lists
+"verify a clean clone" as a step, and doing it now, at P5, cost one command. It should be
+run as part of `make check` from here on, not saved for the last phase.
+
+**The same fixture is also why the retrieval measurement was hard.** At 1 025 of 1 225
+chunks it dominates the index and costs R@1. Committing it makes that visible to anyone
+who runs the eval, which is the correct outcome — the imbalance is a property of the
+corpus, and hiding the file would have hidden the problem.

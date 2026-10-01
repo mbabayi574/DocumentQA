@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pymupdf
 
-SOURCE = Path("tests/fixtures/docs/en/Clean Code Fundamentals-Martin Hock-Leanpub-EBooksWorld.ir.pdf")
+SOURCE = Path(
+    "tests/fixtures/docs/en/Clean Code Fundamentals-Martin Hock-Leanpub-EBooksWorld.ir.pdf"
+)
 TARGET = Path("tests/fixtures/docs/en/clean-code-excerpt.pdf")
 PAGES = 12
 
