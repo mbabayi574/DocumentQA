@@ -27,6 +27,7 @@ from qasystem.chunking.chunker import Chunker
 from qasystem.config import load_settings
 from qasystem.embeddings.caching import CachingEmbedder
 from qasystem.embeddings.client import EmbeddingClient
+from qasystem.errors import ConfigError
 from qasystem.ingestion.service import IngestionService
 from qasystem.parsing.registry import ParserRegistry
 from qasystem.retrieval.gate import load_thresholds
@@ -67,9 +68,15 @@ CROSS_LINGUAL = [
 
 @pytest.fixture
 async def live_env(tmp_path: Path) -> dict[str, object]:
-    settings = load_settings()
+    try:
+        settings = load_settings()
+    except ConfigError as exc:
+        # No .env, so no token. A clean clone must skip rather than error (D31).
+        pytest.skip(f"live run needs a configured provider: {exc.code}")
     if settings.is_fake_provider:
         pytest.skip("EMBEDDING_PROVIDER=fake; nothing live to call")
+    if settings.embedding_api_key is None:
+        pytest.skip("EMBEDDING_API_KEY is not set")
     store = SqliteStore(tmp_path / "qasystem.db")
     async with EmbeddingClient(settings) as client:
         vectors = ChromaStore(
@@ -225,9 +232,9 @@ async def test_no_secret_appears_in_a_live_error(live_env: dict[str, object]) ->
 
     settings = reload_settings()
     token = settings.embedding_api_key
-    assert token is not None
+    if token is None:
+        pytest.skip("no token configured, so there is nothing to assert is absent")
     secret = token.get_secret_value()
-    assert secret, "the live run has no token to check, so it must be skipped instead"
     assert len(secret) >= 8
 
     # Nothing in the retrieval surface echoes a credential, so the check is on the values
