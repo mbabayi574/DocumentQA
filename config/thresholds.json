@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "model_id": "Bge-m3",
+  "calibrated": false,
+  "min_dense": 0.62,
+  "min_coverage": 0.25,
+  "min_lexical": 0.80,
+  "min_coverage_high": 0.50,
+  "min_sentence_overlap": 0.15,
+  "dataset_size": 0,
+  "notes": "CONSERVATIVE PLACEHOLDERS, NOT MEASURED. Plan P7 ships these so the gate is auditable from the first commit; P9 grid-searches them on the dev split and rewrites this file with calibrated=true plus the dataset size and class balance. min_dense sits above the measured similarity of irrelevant pairs; min_coverage_high is higher than min_coverage so the lexical branch is the stricter of the two. Thresholds are keyed on model_id and a mismatched file is refused, never reused."
+}

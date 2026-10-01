@@ -49,7 +49,7 @@ def test_a_stored_word_is_found(store: SqliteStore, index: LexicalIndex) -> None
     add(store, "d", "the quick brown fox jumps over the lazy dog")
     hits = index.search("brown fox")
     assert [hit.chunk_id for hit in hits] == ["d:v1:0"]
-    assert hits[0].rank == 0
+    assert hits[0].rank == 1, "ranks are 1-based, like RRF expects"
 
 
 def test_a_missing_word_returns_nothing(store: SqliteStore, index: LexicalIndex) -> None:
@@ -73,7 +73,7 @@ def test_ranks_are_dense_and_ordered_by_relevance(store: SqliteStore, index: Lex
     add(store, "c", "unrelated prose about cooking")
     hits = index.search("widget install")
     assert [hit.chunk_id for hit in hits] == ["a:v1:0", "b:v1:0"]
-    assert [hit.rank for hit in hits] == [0, 1]
+    assert [hit.rank for hit in hits] == [1, 2]
     assert hits[0].lexical_score == pytest.approx(1.0)
     assert 0.0 < hits[1].lexical_score < 1.0
 

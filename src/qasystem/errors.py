@@ -65,6 +65,13 @@ class NoTextLayerError(QASystemError):
     http_status = 422
 
 
+class InvalidQuestionError(QASystemError):
+    """A question with no searchable terms. 422, because retrying it verbatim cannot help."""
+
+    code = "INVALID_QUESTION"
+    http_status = 422
+
+
 class DocumentNotFoundError(QASystemError):
     """Document id is unknown, deleted, or not active."""
 

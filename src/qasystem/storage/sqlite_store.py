@@ -473,6 +473,15 @@ class SqliteStore:
             params.append(language)
         return self._rows(sql + " ORDER BY doc_id, doc_version, ordinal", params)
 
+    def has_eligible_chunks(self) -> bool:
+        """Whether anything at all is searchable.
+
+        Read only on the path that has nothing to answer with, so ``empty_knowledge_base``
+        is distinguishable from ``no_relevant_content`` without costing the happy path a
+        full id scan.
+        """
+        return self._one("SELECT 1 AS present FROM eligible_chunks LIMIT 1") is not None
+
     def expected_vector_ids(self) -> list[str]:
         """Every chunk row, staging included, so reconcile sees an interrupted ingest."""
         return [

@@ -70,3 +70,61 @@ def test_output_has_no_control_or_zero_width_chars(text: str) -> None:
     cleaned = normalize_for_index(text)
     assert not any(ch in cleaned for ch in "\x00\r\n\t")
     assert ZWSP not in cleaned
+
+
+# ---------------------------------------------------------------- D37
+
+
+def test_a_newline_separates_words_instead_of_fusing_them() -> None:
+    """Control characters are whitespace, not nothing.
+
+    Found by P7's Persian-PDF citation test: the document's bullet list indexed as
+    ``پردازشاسناد`` because ``\\n`` was in the drop set, so the words matched no query at
+    all and the only correct chunk in the document scored zero coverage.
+    """
+    assert normalize_for_index("پردازش\nاسناد") == "پردازش اسناد"
+    assert normalize_for_index("a\nb") == "a b"
+    assert normalize_for_index("a\r\nb") == "a b"
+
+
+def test_every_kind_of_whitespace_collapses_the_same_way() -> None:
+    for separator in (" ", "\n", "\r\n", "\t", "\x0b", "\x0c", "  \n  "):
+        assert normalize_for_index(f"alpha{separator}beta") == "alpha beta"
+
+
+def test_invisible_control_characters_become_separators_not_disappearances() -> None:
+    """NUL and BEL are dropped as far as the eye is concerned, but they still separate."""
+    assert normalize_for_index("a\x00b\x07c") == "a b c"
+    assert normalize_for_index("a\u2028b") == "a b", "a line separator is whitespace too"
+
+
+def test_normalization_is_idempotent_across_line_layouts() -> None:
+    layouts = {
+        "one\ntwo\nthree": "one two three",
+        "one\r\ntwo": "one two",
+        "one two": "one two",
+        "one\n\n\ntwo": "one two",
+    }
+    for text, expected in layouts.items():
+        once = normalize_for_index(text)
+        assert once == expected
+        assert normalize_for_index(once) == once
+
+
+def test_the_zwnj_and_line_break_interaction_is_still_exact() -> None:
+    """A ZWNJ keeps its word together while a newline still ends it."""
+    assert normalize_for_index("می\u200cرود\nمی رود") == "می\u200cرود می رود"
+
+
+def test_tokenizing_across_a_line_break_yields_two_tokens() -> None:
+    from qasystem.text.tokenize import tokenize
+
+    assert tokenize("●پردازش\nاسناد: پشتیبانی")[-3:] == ["پردازش", "اسناد", "پشتیبانی"]
+
+
+def test_the_chunk_hash_ignores_line_layout() -> None:
+    """P3 documents the hash as whitespace-insensitive; that is only true once \\n survives."""
+    from qasystem.chunking.chunker import chunk_hash
+
+    assert chunk_hash(("s",), "alpha\nbeta") == chunk_hash(("s",), "alpha  beta")
+    assert chunk_hash(("s",), "alpha\nbeta") != chunk_hash(("s",), "alphabeta")

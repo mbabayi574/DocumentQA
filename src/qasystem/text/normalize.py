@@ -25,7 +25,12 @@ DIGIT_FOLD.update({0x06F0 + offset: str(offset) for offset in range(10)})
 
 # Zero-width, bidi and other invisible format characters are all category "Cf".
 # Two are kept because they change meaning: ZWNJ and ZWJ.
-_DROP_CATEGORIES = frozenset({"Cf", "Mn", "Me", "Cc"})
+#
+# "Cc" (control characters) is deliberately NOT in this set, even though it holds the
+# invisible ones. It also holds newline and tab, which *separate* words: deleting them
+# fuses the last word of one line onto the first word of the next: the Persian bullet list
+# "processing\ndocuments" indexed as one token "processingdocuments", matching no query (D37).
+_DROP_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
 _KEEP_INVISIBLE = frozenset({ZWNJ, ZWJ})
 
 TATWEEL = "\u0640"  # ـ
@@ -38,10 +43,12 @@ def normalize_for_index(text: str) -> str:
     """
     text = unicodedata.normalize("NFKC", text)
     text = text.translate(LETTER_FOLD).translate(DIGIT_FOLD)
-    text = "".join(
-        ch
-        for ch in text
-        if ch in _KEEP_INVISIBLE
-        or (ch != TATWEEL and unicodedata.category(ch) not in _DROP_CATEGORIES)
-    )
-    return " ".join(text.split())
+    kept: list[str] = []
+    for char in text:
+        if char in _KEEP_INVISIBLE:
+            kept.append(char)
+        elif unicodedata.category(char) == "Cc":
+            kept.append(" ")  # a control character is whitespace, not nothing (D37)
+        elif char != TATWEEL and unicodedata.category(char) not in _DROP_CATEGORIES:
+            kept.append(char)
+    return " ".join("".join(kept).split())

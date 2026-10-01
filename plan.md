@@ -47,11 +47,11 @@
 12. **Keep chat output small.** Never dump embeddings, whole documents, or whole files.
 
 **Order.** One phase per session, one commit per logical change, in dependency order.
-P6 was the highest risk and is done; P7 is next.
+P6 was the highest risk, and is done; P7 is done. P8 (API) is next.
 
 ```text
 P0 ✓ scaffold    P1 ✓ text     P2 ✓ parsing   P3 ✓ chunking   P4 ✓ embeddings   P5 ✓ storage
-→ P6 ✓ ingestion → P7 retrieval+gate+answer → P8 API
+→ P6 ✓ ingestion → P7 ✓ retrieval+gate+answer → P8 API
 → P9 eval + calibration → P10 hardening → P11 refactor + README
 ```
 
@@ -349,6 +349,7 @@ Gates passed; `docs/DECISIONS.md` has the evidence. These constraints must not r
 | **P3** chunking | contiguous slices only, deterministic, heading-aware, sentence packing + a mechanical cap pass | `CHARS_PER_TOKEN=1.5` is the **densest** measured case (tables 1.45, prose 4.14), not the average; the second cap pass exists for content with no sentence terminators at all |
 | **P4** embeddings | discovery, dimension probe, three-bound batching, token bucket, bounded retry, caching | `index` trusted only if a permutation (D21); the per-item cap is enforced locally, before any request (D22); scrub provider messages before they reach an exception (D23) |
 | **P5** storage | schema, repository, FTS5 lexical, Chroma adapter, reconcile + `rebuild`, single-owner lock | explicit `BEGIN`/`COMMIT` (D25); `ensure_collection()` takes no args (D27); `rebuild` accepts a tripwire embedder it never calls, so "zero API calls" is asserted rather than claimed (D28) |
+| **P7** retrieval + gate + answering | `fusion.py` weighted RRF over the **candidate union**, `gate.py` auditable two-branch rule keyed on `model_id`, `service.py` retrieve → gate → answer, `sentences.py` + `extractive.py` selection only | `normalize_for_index` was **deleting newlines** (category `Cc`), fusing the last word of every line onto the first word of the next — every FTS token and every `chunk_hash` for multi-line text was wrong (D37); ranks are 1-based everywhere, so RRF never divides by `k` for the best hit (D38); a weight of **0 disables** an arm, or §9.2's single-arm baselines would silently mix two systems (D39); the gate judges the whole window and only `top_k` sizes the answer (D40); coverage is the max over candidates, so a fusion bug cannot present as a gate refusal (D41); thresholds for another model are a hard `ConfigError`, a missing file only falls back to uncalibrated defaults (D42); Persian coverage loses 0.29 to Ezafe suffixes, the largest known weakness of the lexical arm (D43) |
 | **P6** ingestion | `diff.py` multiset diff, `service.py` add/replace/delete/reconcile, all 12 gate tests | embedding runs **outside** the write lock and before any version exists, so an embed failure costs nothing (D33); VERIFY refuses a partial vector write; a failed version **keeps** its row as `failed` while a superseded one is fully purged (D35); a best-effort cleanup step needs its own assertions, because no correctness test can fail when it is deleted (D34); `embed_requests` is a delta and `reconcile` returns the plan it **found** (D36) |
 
 ---
@@ -419,7 +420,7 @@ validate → parse → chunk → content/parsed hash → unchanged? ──yes─
 **Gate:** all 12 pass; `ingest_log` rows carry counts and timings but no text; clean clone
 green.
 
-### P7 — Retrieval, evidence gate, extractive answering
+### P7 — Retrieval, evidence gate, extractive answering — **DONE, see §8**
 
 **7.1 Retrieval** (`retrieval/service.py`)
 
@@ -690,19 +691,25 @@ Reviewer questions, each answered by a named test:
 | Does a paragraph edit preserve most chunk hashes? Duplicates kept? | P3, P6 test 12 |
 | After deleting `data/chroma/`, does `rebuild` restore search with no API calls? | P5 `rebuild` + tripwire test (D28) |
 | Does a second process on the same `data/` fail fast? | P5 lock test, real subprocesses |
-| Can a Persian query cite a Persian source with no manual RTL handling? | P7 |
+| Can a Persian query cite a Persian source with no manual RTL handling? | P7 `test_6_a_persian_question_cites_a_persian_source`, `test_6b_...pdf...` |
+| Is every answer segment an exact substring of stored source text? | P7 `test_3_every_segment_is_an_exact_substring...` + M2/M13 mutations |
 | Is user text ever interpreted as FTS5 syntax? | P5 hostile-input test |
 | Is every answer segment an exact substring of stored source text? | P7 substring + mutation test |
-| Do unanswerable questions avoid presenting "closest" evidence as citations? | P7 gate tests |
+| Do unanswerable questions avoid presenting "closest" evidence as citations? | P7 plan test 2 (6 cases) + M11 mutation |
 | Is `evidence_score` documented as a non-probability? | README §7 |
-| Can the model change without mixing dimensions, and are thresholds model-specific? | P5 I9 test; `thresholds.json` carries `model_id` |
+| Can the model change without mixing dimensions, and are thresholds model-specific? | P5 I9 test; `thresholds.json` carries `model_id`; P7 `test_thresholds_for_another_model_are_refused` (D42) |
 | Is the token absent from source control, logs, and error bodies? | P0/P4 redaction + scrub tests |
 
 ## 12. Open questions for the human
 
 1. **Fusion weights** — §2 measured 0.9/0.1 ahead of the 0.7/0.3 default, but at 12
    questions that is not decisive. Confirm P9's dev split should decide it rather than
-   adopting the higher value now.
+   adopting the higher value now. `retrieve()` already accepts both weights so §9.2 can
+   measure dense-only and lexical-only without touching config (D39).
+1b. **Persian morphology** — coverage loses 0.29 to Ezafe suffixes (`خطایی` vs `خطا`), with
+   no stemmer in place (D43). P9's Persian questions must include inflected terms or the eval
+   will report morphology mismatch as retrieval quality. Decide whether a light Persian
+   stemmer is in scope before §9.1 is authored.
 2. **Chunk size** — raising `CHUNK_TARGET_TOKENS` toward 2 000-char chunks is worth ~2.9×
    throughput per character (9.5× at 8 000). Confirm it stays a P9 experiment, since it
    trades against retrieval precision.

@@ -710,3 +710,226 @@ inserted a `documents` row per orphan fails `test_9b` and `test_9c`.
 
 M4 and M6 were both **green before** their tests existed. Neither would ever have been
 caught by a test written only from the plan's list of required behaviours.
+
+---
+
+# P7 — retrieval, evidence gate, extractive answering
+
+## D37 — `normalize_for_index` deleted newlines instead of spacing them (D37)
+
+The most consequential defect this project has found, and it was four months of prose deep in
+P1's code, invisible until P7 tried to cite a Persian PDF.
+
+`Cc` (Unicode "control character") was in the drop set. `Cc` holds the invisible characters the
+set was written for — but it also holds `U+000A` newline and `U+0009` tab, which are
+**whitespace**, not nothing. The filter deleted them *before* the final
+`" ".join(text.split())` could turn them into separators, so the last word of every line was
+fused onto the first word of the next:
+
+```python
+    text = unicodedata.normalize("NFKC", text)
+    text = text.translate(LETTER_FOLD).translate(DIGIT_FOLD)
+    text = "".join(ch for ch in text if ch not in _DROP_CATEGORIES)   # ← \n died here
+    return " ".join(text.split())                                    # ← too late
+```
+
+A Persian bullet list came out as one token:
+
+| in the document | indexed as | matched a query for |
+|---|---|---|
+| `●پردازش\nاسناد: پشتیبانی` | `پردازشاسناد` | `پردازش` → no. `اسناد` → no. |
+
+Blast radius, all of it silent:
+
+- **Every FTS token for every multi-line chunk was wrong.** Lexical retrieval — including the
+  §2 measurement of `lexical R@1 0.42` — was run partly against garbage tokens.
+- **`chunk_hash` was not whitespace-insensitive**, contrary to P3's own docstring: `"a\nb"`
+  hashed as `ab`, `"a b"` hashed as `a b`, so two textually identical chunks could disagree.
+- **Gate coverage was unmeasurable** on exactly the bilingual corpus the gate exists to serve.
+
+Fix, at the one place all callers route through: `Cc` characters become a space, the rest of
+the drop set (`Cf`, `Mn`, `Me`) is unchanged, and ZWNJ/ZWJ are still preserved.
+
+```python
+        elif unicodedata.category(char) == "Cc":
+            kept.append(" ")  # a control character is whitespace, not nothing (D37)
+```
+
+Found by a test written for a completely different reason: P7's plan requirement is "a Persian
+question cites a Persian source with correct section, page, and line", so the test needed a
+Persian PDF to be answerable. It refused, with `token_coverage = 0.00` on **every** chunk —
+including the one containing the answer. Coverage of exactly zero is the tell: retrieval had
+found the chunk, so the *tokens* were the problem, not the ranking.
+
+Seven regression tests in `tests/unit/test_normalize.py`, because the generalisation is easy to
+get wrong again: `\n`, `\r\n`, `\t`, `\x0b`, `\x0c`, `U+2028`, `NUL`, `BEL`, idempotence across
+layouts, and `chunk_hash` now ignoring line layout as P3 documented.
+
+**The lesson is the same one as D32, and worth stating once:** both bugs were invisible because
+no test's *premise* touched them. A test that is hard to write is often reporting that the code
+is wrong — and so is a test that passes while measuring something adjacent to what it claims.
+
+## D38 — ranks are 1-based, everywhere (D38)
+
+`LexicalHit.rank` came out of P5 as `enumerate(rows)` — zero-based. RRF computes
+`w / (k + rank)`, so a zero-based rank divides the single best lexical hit in the set by
+exactly `k`, giving it the largest boost available. That is precisely the artefact reciprocal
+rank fusion exists to remove, and it was one off-by-one away.
+
+Found when `fuse()` rejected `rank=0` and the P7 integration test could not get past setup.
+
+Fixed at the source: `LexicalHit.rank` is 1-based, its docstring says why, and the two P5
+assertions that pinned `0` / `[0, 1]` became `1` / `[1, 2]`. One convention for ranks across
+the system; a hidden `+ 1` at the single call site would have been the alternative and would
+have been found again in six months.
+
+## D39 — fusion is over the candidate union, and weight 0 disables an arm (D39)
+
+Two properties of `retrieval/fusion.py`, both mutation-verified.
+
+**Union, never corpus ranks.** §2 records that fusing full-corpus dense ranks made hybrid look
+*worse* than dense (R@3 0.75 vs 0.92) — a "finding" that measured a system nobody would build.
+Nothing in P7 could have prevented that regression on its own, because `fuse()` is a pure
+function and cannot know whether its caller handed it window ranks or corpus ordinals.
+
+`test_fusion_ranks_within_the_window_never_over_the_corpus` therefore pins the caller's
+behaviour on a 40-chunk corpus whose answerable chunk is **last**: its dense rank is 3 and its
+lexical rank is 1, its fused score is `0.7/63 + 0.3/61`, and that is explicitly **not**
+`0.7/99 + 0.3/99`, which is what corpus ordinals would have produced. Swapping the ranks for
+corpus ordinals fails it.
+
+**A weight of 0 switches an arm off.** §9.2 needs dense-only and lexical-only numbers. A
+"lexical-only" measurement that still admitted dense-only hits at score 0.0 would not be
+lexical-only, and the resulting number would silently mix two systems in a comparison whose
+whole purpose is to separate them. `fuse()` now skips a zero-weight arm entirely. I wrote the
+test asserting the opposite first — that a zero weight "contributes nothing but still yields
+candidates" — which is what a naive reading of "union" suggests, and it was wrong for the one
+caller that matters.
+
+## D40 — the gate judges the whole window; `top_k` sizes the answer only (D40)
+
+The first implementation called `retrieve(..., limit=top_k)` and gated the result. So with
+`top_k=1` the gate saw exactly one chunk, and a well-covered chunk ranked second could not
+rescue a question the system could answer. Truncation is an **answer-size** decision; making it
+before the gate let ranking decide the question, which is the gate's job.
+
+`answer()` now retrieves the full `CANDIDATES_N` window, gates it, and passes only
+`candidates[:top_k]` to the answerer. `test_the_gate_sees_beyond_the_answer_size` asserts the
+gate received more than `top_k` candidates and that coverage 1.0 was among them.
+
+**This one is not reproducible with the fake embedder**, and the test says so. A bag-of-tokens
+embedder makes "more token overlap" imply "better dense rank", so a chunk that is ranked low
+*because* it covers few of the query's words cannot be constructed. With BGE-M3 it is the
+ordinary case: dense R@1 is 0.67 (§2), so a semantically close chunk routinely covers few
+query words. The test asserts the observable contract — the gate's input size and the coverage
+it received — which is exactly what the mutation `limit=top_k` breaks.
+
+## D41 — gate coverage is the maximum over candidates, not the top candidate's (D41)
+
+`token_coverage` in the verdict is `max` over the window. The tempting alternative is to read it
+off the highest-fused candidate, which is one line shorter and wrong: it makes the gate depend
+on the very ranking the gate exists to check, so a fusion bug would present as a gate refusal
+with no signal that the ranking was at fault. Maximum coverage asks the question the gate
+actually means — *does any retrieved chunk contain the query's words* — and does not care which
+one the fuser liked best.
+
+`max_dense` and `lexical` follow the same rule, for the same reason.
+
+## D42 — thresholds are keyed by `model_id`, and the failure modes differ on purpose (D42)
+
+`config/thresholds.json` ships conservative placeholders with `"calibrated": false`. A
+similarity of 0.6 is a statement about the model that produced it, so `load_thresholds` refuses
+a file whose `model_id` is not the embedder's — `ConfigError`, loud, no fallback. That is the
+I9 rule one layer up, and P9's `make calibrate` must re-run rather than inherit.
+
+But a **missing or corrupt** file falls back to the uncalibrated defaults with a warning. The
+distinction is not inconsistency: "we have no calibrated thresholds" and "we have another
+model's real thresholds" are different failures, and only one of them makes a number wrong
+rather than merely uncalibrated. Refusing to start over a placeholder would make the system
+useless rather than cautious, and the defaults err toward **refusing more**, never less.
+
+`/ready` will report the flag; the README must not claim calibration before P9.
+
+## D43 — what token coverage costs, measured (D43)
+
+Coverage is a fraction of the question's non-stopword tokens present in a chunk, and there is
+no stemmer (P1's decision, P9's to revisit). Measured on this corpus:
+
+| question | source wording | coverage |
+|---|---|---|
+| `kernel version` | `It checks the kernel version first.` | 1.00 |
+| `What does the service return when the token is invalid` | `The service returns ERR-404…` | 0.75 |
+| `ERR-404 token invalid` | verbatim | 1.00 |
+| `سرویس در صورت نامعتبر بودن توکن` | verbatim | 1.00 |
+| `سرویس چه خطایی برمی‌گرداند` | `…خطای ERR-404…` | 0.71 |
+| `Which Linux distribution does the installer support` | `Run the installer on Linux.` | 0.50 |
+
+Two things this says, both P9's problem rather than P7's:
+
+- **English inflection costs 0.25.** `return` vs `returns`. P7's test thresholds are set from
+  these measurements, so the test suite documents the real shape of the signal rather than a
+  number chosen to make a test pass.
+- **Persian has no stemming, and the gap is Ezafe.** `خطایی` (the question's "error") against
+  `خطا` (the source's) scores zero. ZWNJ compounds are fine — D8's split-components behaviour
+  makes `می‌رود` match `می رود` — but suffixes are not handled at all. **This is the single
+  largest known weakness of the lexical arm, and §9.1's bilingual dataset must include Persian
+  questions whose terms are inflected differently from the source**, or the eval will report a
+  retrieval quality that is really a morphology mismatch.
+
+Also measured, because the fake embedder's scale matters for every threshold in the test suite:
+a two-token question against a 40-character chunk scores cosine **0.19–0.32** with the hashed
+bag-of-tokens, where BGE-M3 scores 0.7+. So `min_dense = 0.05` in the P7 tests and `min_coverage`
+carries the decision. That is not a loosened threshold — it is the correct acknowledgement that
+the fake embedder cannot discriminate, and it is why the shipped `min_dense` is 0.62.
+
+## D44 — `test_3b` passed for the wrong reason (D44)
+
+The I7 test stripped the `[n]` markers out of the rendered answer and compared the remainder to
+the concatenated segments. Lossy: the fixture's quoted sentence already ended in a period, so a
+mutation that **stripped the period and appended one after the marker** produced a byte-identical
+string after stripping. A paraphrase mutation passed a test whose entire claim was "no
+paraphrase".
+
+Rewritten to pin the rendering exactly — `answer == " ".join(f"{text} [{id}]")` — on a source
+whose sentence has **no** terminal punctuation, so any added full stop is detectable. Re-run
+against the mutation, it fails. The lesson repeats D25 and D26: a test that cannot fail is
+worse than no test, because it certifies the property.
+
+## What a citation can honestly carry
+
+Measured across the three parsers: `page` comes from PDFs, `lines` from Markdown and TXT, and a
+PDF's text layer has no line numbers at all — so `lines` is `null` for a PDF rather than
+invented. The section path is real in both cases (`ai-engineer > page 4`, `Handbook > Install`).
+`test_6b` asserts the PDF case *including* `lines is None`, so the gap is a pinned fact rather
+than a surprise for a caller.
+
+`source_name` was added to the `eligible_chunks` view so that one statement returns the text and
+everything a citation quotes about it. That is not a convenience: it removes the window between
+deciding a chunk is eligible and reading its text, in which a publish could otherwise slip in.
+
+`has_eligible_chunks()` exists only to separate `empty_knowledge_base` from
+`no_relevant_content`, and is read **only** on the path that has nothing to answer with — so the
+happy path pays nothing for the distinction.
+
+## P7 mutation results
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M1 | dense path reads `chunks` directly, no `eligible_chunks` join | 44 tests, incl. `test_5_superseded_text_...`, `test_5b_deleted_text_...` |
+| M2 | segment text re-typed instead of sliced from the chunk | `test_6_a_persian_...`, `test_6b_...`, `test_8_hostile_fts...` |
+| M3 | gate passes with zero candidates | `test_no_candidates_cannot_pass_...` |
+| M4 | newline deleted again instead of spaced | 3 tests in `test_normalize.py` |
+| M5 | zero weight only zeroes a contribution | `test_a_zero_weight_arm_switches_off_entirely`, `test_a_single_arm_baseline_...` |
+| M6 | fusion over **corpus ordinals** instead of the window (D30) | `test_fusion_ranks_within_the_window_never_over_the_corpus` |
+| M7 | `top_k` truncates the gate's input | `test_the_gate_sees_beyond_the_answer_size` |
+| M8 | pad the answer with sentences below `min_overlap` | `test_3e_an_unrelated_sentence_is_never_padded_in` |
+| M9 | segments no longer in source position | `test_3c_segments_are_ordered_by_source_position` |
+| M10 | a citation offset that does not match its excerpt | `test_a_citation_points_at_real_source_offsets` |
+| M11 | a refusal carries its closest chunks as citations | 6 tests, incl. all of plan test 2 |
+| M12 | thresholds for another model silently reused | `test_thresholds_for_another_model_are_refused` |
+| M13 | the rendered answer paraphrases the slice | `test_3b_..._exactly_the_slices_plus_their_markers` (after D44) |
+| M14 | segments merged across a gap of real text | `test_3f_sentences_separated_by_real_text_are_not_merged` |
+| M15 | an empty question is served the whole corpus | 5 cases of `test_a_question_with_no_terms_is_a_422` |
+
+M6, M13 and M14 were **green before their tests existed**. M13 in particular was green *because*
+the test's comparison was lossy, which is the failure mode D44 is about.

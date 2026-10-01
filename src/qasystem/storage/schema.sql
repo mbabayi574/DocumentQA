@@ -98,8 +98,10 @@ CREATE TABLE IF NOT EXISTS ingest_log (
 CREATE INDEX IF NOT EXISTS ingest_log_by_doc ON ingest_log (doc_id, id);
 
 -- THE choke point. Every retrieval path reads chunks ONLY through this view.
+-- source_name comes along so retrieval reads the text and everything a citation quotes in
+-- ONE statement: no second query, so no window between deciding eligibility and using it.
 CREATE VIEW IF NOT EXISTS eligible_chunks AS
-  SELECT c.* FROM chunks c
+  SELECT c.*, d.source_name AS source_name FROM chunks c
   JOIN documents d ON d.doc_id = c.doc_id
                   AND d.status = 'active'
                   AND d.current_version = c.doc_version;

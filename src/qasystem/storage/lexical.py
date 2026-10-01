@@ -23,12 +23,17 @@ from qasystem.text.tokenize import fts_query_terms
 
 @dataclass(frozen=True)
 class LexicalHit:
-    """One lexical match: the FTS row's ``bm25`` plus a rank and a normalized score."""
+    """One lexical match: the FTS row's ``bm25`` plus a rank and a normalized score.
+
+    ``rank`` is 1-based, matching RRF's ``k + rank`` and the dense arm. A 0-based rank is
+    one off-by-one away from dividing by ``k`` for the single best hit in the set, which is
+    exactly the artefact reciprocal rank fusion exists to remove.
+    """
 
     chunk_id: str
     bm25: float
     lexical_score: float  # 1.0 for the best hit in this result set
-    rank: int
+    rank: int  # 1-based
 
 
 class LexicalIndex:
@@ -58,5 +63,5 @@ class LexicalIndex:
                 lexical_score=(float(row["bm25"]) / best) if best < 0 else 0.0,
                 rank=rank,
             )
-            for rank, row in enumerate(rows)
+            for rank, row in enumerate(rows, start=1)
         ]
