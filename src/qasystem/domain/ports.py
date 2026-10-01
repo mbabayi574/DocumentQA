@@ -11,7 +11,6 @@ from typing import Protocol, runtime_checkable
 from qasystem.domain.models import ParsedDocument, VectorHit, VectorItem
 
 
-@runtime_checkable
 class Embedder(Protocol):
     """Turns text into vectors. Implementations may be remote or offline."""
 
@@ -23,7 +22,6 @@ class Embedder(Protocol):
         ...
 
 
-@runtime_checkable
 class VectorStore(Protocol):
     """Derived, rebuildable dense index (local persistent Chroma in production)."""
 

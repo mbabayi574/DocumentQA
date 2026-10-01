@@ -240,3 +240,45 @@ the hard cap at fixed intervals with the configured overlap. The second pass is 
 makes the cap hold for *any* input, not just prose.
 **Evidence:** `test_no_chunk_exceeds_the_hard_cap` went from 60 breaches to 0, and the
 gate re-run over all five fixtures reports `over_cap=0` for 1 225 chunks.
+
+## D20 — audit pass: dead flexibility removed before P4 (D20)
+
+A repo-wide over-engineering audit ran against P0–P3. Verified, then applied:
+
+- **`INVISIBLE_DROP` deleted.** All 14 hand-enumerated codepoints are Unicode
+  category `Cf`; so are ZWNJ and ZWJ. One category test with a two-character keep-set
+  replaces the whole table, and the keep-set is now explicit about *why* those two
+  survive.
+- **`_VERSION_RE` + `_is_version` deleted.** They guarded a case `rstrip(".")` already
+  handles: `v2.3.1`, `3.14` keep their dots, `sentence.` and `ERR-404.` lose them.
+- **FTS quote-escaping deleted.** `_TOKEN_RE` cannot emit `"`, so escaping it was dead.
+- **`EN_STOPWORDS`/`FA_STOPWORDS` collapsed** into one `STOPWORDS`; the split had no reader.
+- **Trim hoisted to `parsing/base.trim`**, replacing the same loop in `markdown.py` and
+  `text.py`. **`basename`/`stem`/`extension`** replace two near-duplicate filename
+  splitters. **`line_to_char` inlined** — it had one caller.
+- **PDF text and sections built in one pass.** They were computed twice: once by
+  `"\n".join(...)` and again by `_page_sections`' running offsets, which had to
+  re-derive the same newline accounting by hand.
+- **`Chunk.chunk_hash` and `Chunk.language` lost their defaults.** A default of `""`
+  yields a chunk with an unusable hash; the field was reordered ahead of the optional
+  location fields because dataclasses forbid a required field after a defaulted one.
+  This deviates from plan.md §4's field *order* only — §4 fixed the names, not the order.
+- **`@runtime_checkable` removed** from `Embedder` and `VectorStore`; both are checked by
+  assignment, which needs no decorator. `DocumentParser` keeps it (one `isinstance` test).
+- **`numpy` dropped as a direct dependency.** Imported nowhere; it arrives via
+  `chromadb`. It remains in `test_domain_purity.FORBIDDEN` as a *string*, which still
+  enforces that the domain layer cannot import it.
+- **`make smoke|eval|calibrate|rebuild` removed.** All four invoked `qasystem.cli`,
+  which does not exist; each failed on invocation. They return with the CLI in P5/P9.
+- **Duplicate PDF tests consolidated.** `test_parsing_pdf.py` kept only what needs a
+  synthetic PDF (corrupt, wrong magic bytes, no text layer, empty); fixture-wide
+  coverage lives once in `test_parsing_pdf_fixtures.py`.
+
+**Not changed, deliberately:** `CHARS_PER_TOKEN`, `chunk_hash`'s normalization, and
+`_enforce_cap`'s trailing coverage append each encode a decision recorded above (D17,
+D19) that tests depend on. Shrinking them would undo documented behaviour rather than
+remove complexity.
+
+**Two bugs the refactor itself introduced, caught by the suite and fixed:** an inverted
+keep/drop test that deleted ZWNJ (the D8 behaviour silently broke), and a test asserting
+`ai-engineer.pdf`'s blank page was page 1 when it is page 2.

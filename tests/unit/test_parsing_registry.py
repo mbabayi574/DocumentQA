@@ -2,42 +2,34 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from qasystem.errors import (
-    EmptyDocumentError,
-    FileTooLargeError,
-    UnsupportedFormatError,
-)
+from qasystem.errors import EmptyDocumentError, FileTooLargeError, UnsupportedFormatError
 from qasystem.parsing.registry import ParserRegistry
 
 registry = ParserRegistry(max_upload_mb=1)
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "docs"
 
 
 def test_md_extension_dispatches_to_markdown() -> None:
-    doc = registry.parse(b"# Guide\n\nbody", "guide.md")
-    assert doc.format == "md"
+    assert registry.parse(b"# Guide\n\nbody", "guide.md").format == "md"
 
 
 def test_txt_extension_dispatches_to_text() -> None:
-    doc = registry.parse(b"plain body", "notes.txt")
-    assert doc.format == "txt"
+    assert registry.parse(b"plain body", "notes.txt").format == "txt"
 
 
 def test_pdf_extension_dispatches_to_pdf() -> None:
-    pymupdf = pytest.importorskip("pymupdf")
-    doc = pymupdf.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "Hello from a real PDF page")
-    assert registry.parse(doc.tobytes(), "sample.pdf").format == "pdf"
+    data = (FIXTURES / "fa" / "ai-engineer.pdf").read_bytes()
+    assert registry.parse(data, "sample.pdf").format == "pdf"
 
 
 def test_pdf_magic_bytes_win_over_a_lying_extension() -> None:
     """A .txt upload that is really a PDF must still parse as a PDF."""
-    pymupdf = pytest.importorskip("pymupdf")
-    doc = pymupdf.open()
-    doc.new_page().insert_text((72, 72), "content behind a txt extension")
-    assert registry.parse(doc.tobytes(), "sneaky.txt").format == "pdf"
+    data = (FIXTURES / "fa" / "ai-engineer.pdf").read_bytes()
+    assert registry.parse(data, "sneaky.txt").format == "pdf"
 
 
 def test_wrong_magic_bytes_for_pdf_extension_is_rejected() -> None:
@@ -51,11 +43,6 @@ def test_unsupported_extension_is_rejected() -> None:
     assert "html" in str(exc.value)
 
 
-def test_docx_is_rejected_with_the_offending_extension() -> None:
-    with pytest.raises(UnsupportedFormatError, match="docx"):
-        registry.parse(b"PK\x03\x04", "report.docx")
-
-
 def test_extension_is_case_insensitive() -> None:
     assert registry.parse(b"# G\n\nbody", "GUIDE.MD").format == "md"
 
@@ -67,8 +54,7 @@ def test_size_limit_is_enforced_before_parsing() -> None:
 
 
 def test_exactly_at_the_limit_is_allowed() -> None:
-    doc = registry.parse(b"y" * (1024 * 1024), "exact.txt")
-    assert doc.text
+    assert registry.parse(b"y" * (1024 * 1024), "exact.txt").text
 
 
 def test_empty_document_is_rejected() -> None:

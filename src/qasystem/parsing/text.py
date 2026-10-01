@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from qasystem.domain.models import ParsedDocument, Section
 from qasystem.errors import EmptyDocumentError, ParseError
-from qasystem.parsing.base import build_document, line_span_to_char_span, line_starts, stem
+from qasystem.parsing.base import (
+    build_document,
+    line_span_to_char_span,
+    line_starts,
+    stem,
+    trim,
+)
 
 
 class TextParser:
@@ -59,12 +65,10 @@ def _blocks(text: str, total_lines: int) -> list[tuple[int, int]]:
 def _paragraph_section(
     text: str, starts: list[int], line_start: int, line_end: int, title: str
 ) -> Section:
-    char_start, char_end = line_span_to_char_span(starts, line_start, line_end, len(text))
-    # Trim surrounding whitespace so a citation quotes the paragraph, not its blank line.
-    while char_start < char_end and text[char_start].isspace():
-        char_start += 1
-    while char_end > char_start and text[char_end - 1].isspace():
-        char_end -= 1
+    # Trim so a citation quotes the paragraph, not its surrounding blank lines.
+    char_start, char_end = trim(
+        text, *line_span_to_char_span(starts, line_start, line_end, len(text))
+    )
     return Section(
         char_start=char_start,
         char_end=char_end,

@@ -7,6 +7,24 @@ later slice that text directly, so a wrong offset becomes a wrong citation.
 from __future__ import annotations
 
 from qasystem.domain.models import ParsedDocument, Section
+from qasystem.errors import EmptyDocumentError
+
+
+def basename(filename: str) -> str:
+    """Filename with any directory path stripped."""
+    return filename.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def stem(filename: str) -> str:
+    """Filename without directory or extension; the title fallback."""
+    name = basename(filename)
+    return name.rsplit(".", 1)[0] if "." in name else name
+
+
+def extension(filename: str) -> str:
+    """Lowercase extension including the dot, or ``""`` when there is none."""
+    name = basename(filename)
+    return "." + name.rsplit(".", 1)[1].lower() if "." in name else ""
 
 
 def line_starts(text: str) -> list[int]:
@@ -18,20 +36,26 @@ def line_starts(text: str) -> list[int]:
     return starts
 
 
-def line_to_char(starts: list[int], line: int, total: int) -> int:
-    """Char offset for a 1-based line number, clamped to the text length."""
-    if line <= 0:
-        return 0
-    if line > len(starts):
-        return total
-    return starts[line - 1]
-
-
 def line_span_to_char_span(
     starts: list[int], line_start: int, line_end: int, total: int
 ) -> tuple[int, int]:
-    """Half-open char span for an inclusive 1-based line range."""
-    return line_to_char(starts, line_start, total), line_to_char(starts, line_end + 1, total)
+    """Half-open char span for an inclusive 1-based line range, clamped to ``total``."""
+
+    def at(line: int) -> int:
+        if line <= 0:
+            return 0
+        return total if line > len(starts) else starts[line - 1]
+
+    return at(line_start), at(line_end + 1)
+
+
+def trim(text: str, start: int, end: int) -> tuple[int, int]:
+    """Shrink a span so it excludes surrounding whitespace."""
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    return start, end
 
 
 def build_document(
@@ -42,10 +66,8 @@ def build_document(
     format: str,
 ) -> ParsedDocument:
     """Assemble a ParsedDocument, dropping sections whose slice would be blank."""
-    kept = [section for section in sections if text[section.char_start : section.char_end].strip()]
+    kept = [s for s in sections if text[s.char_start : s.char_end].strip()]
     if not text.strip() or not kept:
-        from qasystem.errors import EmptyDocumentError
-
         raise EmptyDocumentError("document has no extractable text")
     return ParsedDocument(
         title=title,
@@ -53,9 +75,3 @@ def build_document(
         sections=tuple(kept),
         format=format,  # type: ignore[arg-type]
     )
-
-
-def stem(filename: str) -> str:
-    """Filename without directory or extension, used as a title fallback."""
-    base = filename.replace("\\", "/").rsplit("/", 1)[-1]
-    return base.rsplit(".", 1)[0] if "." in base else base

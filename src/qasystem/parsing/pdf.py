@@ -33,40 +33,37 @@ class PdfParser:
         if not data.startswith(MAGIC):
             raise ParseError("file does not start with the %PDF- magic bytes")
 
-        try:
-            document = _open(data)
-        except NoTextLayerError:
-            raise
-        except Exception as exc:
-            raise ParseError(f"cannot read PDF: {type(exc).__name__}") from None
-
         title = stem(filename)
-        try:
-            pages = [_page_text(document, number) for number in range(document.page_count)]
-        finally:
-            document.close()
-
+        pages = _page_texts(data)
         if not any(pages):
             raise NoTextLayerError(
                 "PDF has no text layer (a scanned document); OCR is not supported"
             )
-
-        text = "\n".join(page for page in pages if page)
-        sections = _page_sections(pages, title)
+        text, sections = _join(pages, title)
         return build_document(title=title, text=text, sections=sections, format="pdf")
 
 
 def _open(data: bytes) -> Any:
-    """PyMuPDF ships no type stubs, so ``Document`` is held as Any at this boundary."""
-    document: Any = pymupdf.open(stream=data, filetype="pdf")  # type: ignore[no-untyped-call]
-    if document.needs_pass:
+    """Open bytes as a PDF. PyMuPDF ships no stubs, so Document is held as Any."""
+    try:
+        return pymupdf.open(stream=data, filetype="pdf")  # type: ignore[no-untyped-call]
+    except Exception as exc:
+        raise ParseError(f"cannot read PDF: {type(exc).__name__}") from None
+
+
+def _page_texts(data: bytes) -> list[str]:
+    """One entry per page, empty string for a blank page."""
+    document = _open(data)
+    try:
+        if document.needs_pass:
+            raise ParseError("PDF is encrypted and cannot be read")
+        return [_page_text(document, number) for number in range(document.page_count)]
+    finally:
         document.close()
-        raise ParseError("PDF is encrypted and cannot be read")
-    return document
 
 
 def _page_text(document: Any, number: int) -> str:
-    """Blocks sorted into reading order, joined; empty string for a blank page.
+    """Blocks sorted into reading order, joined.
 
     NFKC is applied because a PDF's text is *constructed* by us, not uploaded bytes:
     presentation-form glyphs map onto the letters a reader actually sees. Measured to
@@ -85,23 +82,30 @@ def _page_text(document: Any, number: int) -> str:
     return "\n".join(parts)
 
 
-def _page_sections(pages: list[str], title: str) -> list[Section]:
-    """One section per page that carries text, with running char offsets."""
+def _join(pages: list[str], title: str) -> tuple[str, list[Section]]:
+    """Build the document text and its page sections in one pass.
+
+    Pages are joined with ``\\n``, skipping blanks, so each section's offsets index
+    that exact string. One loop keeps text and offsets from drifting apart, which is
+    what makes I6 checkable.
+    """
+    text: list[str] = []
     sections: list[Section] = []
     offset = 0
     for page_number, page in enumerate(pages, start=1):
         if not page:
-            offset += 1  # the joining newline of an empty page still consumes a char
             continue
-        start, end = offset, offset + len(page)
+        if text:
+            offset += 1  # the joining newline before this page
+        text.append(page)
         sections.append(
             Section(
-                char_start=start,
-                char_end=end,
+                char_start=offset,
+                char_end=offset + len(page),
                 section_path=(title, f"page {page_number}"),
                 page_start=page_number,
                 page_end=page_number,
             )
         )
-        offset = end + 1
-    return sections
+        offset += len(page)
+    return "\n".join(text), sections

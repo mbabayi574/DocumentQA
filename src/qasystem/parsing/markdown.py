@@ -12,7 +12,13 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from qasystem.domain.models import ParsedDocument, Section
-from qasystem.parsing.base import build_document, line_span_to_char_span, line_starts, stem
+from qasystem.parsing.base import (
+    build_document,
+    line_span_to_char_span,
+    line_starts,
+    stem,
+    trim,
+)
 
 
 class MarkdownParser:
@@ -60,7 +66,7 @@ def _walk(
         char_start, char_end = line_span_to_char_span(
             starts, token.map[0] + 1, token.map[1], len(text)
         )
-        char_start, char_end = _trim(text, char_start, char_end)
+        char_start, char_end = trim(text, char_start, char_end)
         if char_start >= char_end:
             continue
         sections.append(
@@ -84,11 +90,3 @@ def _heading_text(inline_token: Token) -> str:
     ]
     heading = " ".join(part.strip() for part in parts if part.strip())
     return heading or "Untitled"
-
-
-def _trim(text: str, start: int, end: int) -> tuple[int, int]:
-    while start < end and text[start].isspace():
-        start += 1
-    while end > start and text[end - 1].isspace():
-        end -= 1
-    return start, end

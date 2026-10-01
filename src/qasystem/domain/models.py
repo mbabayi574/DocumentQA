@@ -47,12 +47,14 @@ class Chunk:
     char_end: int
     text: str
     section_path: tuple[str, ...]
+    chunk_hash: str  # sha256(canonical(section_path) + normalized text)
+    language: Language
+    # Optional location fields follow the required ones, so a Chunk can never be
+    # built with an empty hash or a silently-defaulted language.
     page_start: int | None = None
     page_end: int | None = None
     line_start: int | None = None
     line_end: int | None = None
-    chunk_hash: str = ""
-    language: Language = "en"
 
 
 @dataclass(frozen=True)
