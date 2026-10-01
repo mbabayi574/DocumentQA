@@ -74,3 +74,28 @@ Built exactly the modules the P0 "Tests first" list names, no more:
 `api/routes.py`, `schemas.py`, `deps.py`, `cli.py` and `config/thresholds.json` are
 P8/P9 artifacts; the Makefile already wires `smoke`/`eval`/`calibrate`/`rebuild` to
 them so those targets need no rework.
+## D8 — the ZWNJ triple, because one spelling is not enough (P1)
+
+**Context:** a Persian document may write `فرمت‌های` (with ZWNJ) while a user
+types `فرمت های` (with a space). plan.md P1 requires keeping ZWNJ compounds *and*
+emitting split components "for recall". Emitting only the parts loses the compound;
+emitting only the compound loses the spaced query.
+**Decision:** `tokenize` emits three forms for a ZWNJ token — the compound
+(`فرمت‌های`), the fused form (`فرمتهای`), and the parts (`فرمت`, `های`) — and
+`normalize_for_index` keeps ZWNJ while dropping other zero-width characters.
+**Evidence:** measured overlap between the two spellings is now
+`{فرمت, های, pdf, markdown}`, so both directions match. A single-form tokenizer
+matched on at most one side.
+**Rejected:** deleting ZWNJ in normalization. It fuses `می‌رود` into `میرود`, which
+silently changes the word and corrupts any stored offset comparison.
+
+## D9 — Persian stopwords live in one string, with an explicit noqa (P1)
+
+**Context:** `ruff`'s RUF001 flags Persian letters as ASCII-confusable (`ه` looks like
+`o`, `ا` like `l`) and its formatter exploded the stopword list to one word per line,
+which is unreadable for a vocabulary.
+**Decision:** keep each language's stopwords in one space-separated string and add
+`# ruff: noqa: RUF001` with the reason. List form is the formatter's preference, not a
+readability win here.
+**Lesson:** when a linter's fix is worse than the code, scope the rule out and say why
+in a comment, rather than fighting it per line.
