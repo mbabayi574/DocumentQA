@@ -22,8 +22,9 @@ wheels/
 .coverage
 htmlcov/
 
-# Small fixtures under tests/fixtures/docs/ are committed. Only the oversized
-# sample books are ignored: the 10 MB English book is parsed once by
-# scripts/build_pdf_fixtures.py, which commits a 12-page excerpt instead.
+# Small fixtures under tests/fixtures/docs/ are committed, including the 749 KB Persian
+# book: it is the only proof that NFKC is required, it pins the lost-space limitation,
+# and two tests fail without it. Only the 10 MB English sample book is ignored -- it is
+# parsed once by scripts/build_pdf_fixtures.py, which commits a 12-page excerpt instead,
+// and its test skips when the file is absent.
 /tests/fixtures/docs/en/Clean Code Fundamentals-Martin Hock-Leanpub-EBooksWorld.ir.pdf
-/tests/fixtures/docs/fa/justforfun_book_a4.pdf
