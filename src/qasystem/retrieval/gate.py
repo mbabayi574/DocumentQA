@@ -5,18 +5,27 @@ This runs **before** any answer text is chosen. It is the only thing standing be
 so it is deliberately a small, readable, auditable rule rather than a score:
 
 ```text
-passed = (max_dense >= min_dense AND coverage >= min_coverage)
-      OR (lexical   >= min_lexical AND coverage >= min_coverage_high)
+passed = (max_dense >= min_dense           AND coverage >= min_coverage)
+      OR (max_dense >= min_dense_alone)                    # uncorroborated, see below
+      OR (lexical   >= min_lexical         AND coverage >= min_coverage_high)
 ```
 
-Two properties matter more than the constants:
+Three disjuncts, because there are three evidentiary situations, and they are not the same:
 
-* **Coverage is required on both branches.** A semantically close chunk that never
-  contains the query's words is not evidence, and §2's retrieval reality check is the
-  reason: dense R@1 is 0.67, so dense similarity alone must never authorise an answer.
-* **Thresholds are keyed by ``model_id``.** A similarity of 0.6 means something specific
-  about the model that produced it, so another model's numbers are refused rather than
-  reused (the I9 rule, one layer up).
+* **Dense and lexical agree** -- the query's words are in the chunk *and* the embedding is
+  close. The strongest evidence, so the dense bar is the lowest.
+* **Dense alone.** ``token_coverage`` counts *shared tokens*, so for the cross-lingual case
+  §2 is built around -- an English question against a Persian source -- coverage is not
+  merely unmet but **structurally zero**. Requiring it there made the gate unable to
+  authorise the system's own headline capability, and the live run refused a correctly
+  retrieved cross-lingual answer every time (D47). This branch exists for that case and
+  demands a *higher* dense bar, because nothing corroborates it.
+* **Lexical exact terms** -- identifiers and numbers, where the match is exact and coverage
+  is the evidence.
+
+Thresholds are keyed by ``model_id``: a similarity of 0.6 means something specific about the
+model that produced it, so another model's numbers are refused rather than reused (the I9
+rule, one layer up).
 
 A missing or corrupt file falls back to conservative **uncalibrated** defaults, because
 refusing to start would make the system useless rather than merely cautious. A file whose
@@ -39,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 THRESHOLD_FIELDS = (
     "min_dense",
+    "min_dense_alone",
     "min_coverage",
     "min_lexical",
     "min_coverage_high",
@@ -51,6 +61,7 @@ class Thresholds:
     """The gate's constants, plus the identity of the model they belong to."""
 
     min_dense: float
+    min_dense_alone: float
     min_coverage: float
     min_lexical: float
     min_coverage_high: float
@@ -121,24 +132,30 @@ def evaluate(signals: GateSignals, thresholds: Thresholds) -> GateVerdict:
     # an artifact of a default, not evidence.
     if signals.candidate_count == 0:
         return GateVerdict(False, "below_threshold", signals, t)
-    dense_ok = signals.max_dense >= t.min_dense and signals.token_coverage >= t.min_coverage
-    lexical_ok = signals.lexical >= t.min_lexical and signals.token_coverage >= t.min_coverage_high
-    if dense_ok:
+    if signals.max_dense >= t.min_dense and signals.token_coverage >= t.min_coverage:
         return GateVerdict(True, "dense+coverage", signals, t)
-    if lexical_ok:
+    if signals.max_dense >= t.min_dense_alone:
+        return GateVerdict(True, "dense_only", signals, t)
+    if signals.lexical >= t.min_lexical and signals.token_coverage >= t.min_coverage_high:
         return GateVerdict(True, "lexical+coverage", signals, t)
     return GateVerdict(False, "below_threshold", signals, t)
 
 
 def defaults(model_id: str) -> Thresholds:
-    """Conservative placeholders, honestly flagged.
+    """Placeholders derived from a live measurement, and honestly flagged (D47).
 
-    ``min_dense`` sits above the corpus's measured irrelevant-pair similarity, and
-    ``min_coverage_high`` is high on purpose: the lexical branch exists for exact
-    identifiers and numbers, and those should have to match *most* of the query.
+    Measured on the committed corpus with real BGE-M3: ``max_dense`` was 0.501-0.631 for
+    answerable questions and 0.359-0.451 for unanswerable ones. The earlier guess of 0.62
+    sat *inside* the answerable range, which made the dense branch of the rule unable to be
+    the deciding signal at all.
+
+    Both bars clear the measured irrelevant band. ``min_dense_alone`` is the higher of the
+    two because that branch has nothing corroborating it. 18 questions is nowhere near
+    enough to call this calibrated: P9 grid-searches it, and ``calibrated`` stays false.
     """
     return Thresholds(
-        min_dense=0.62,
+        min_dense=0.47,
+        min_dense_alone=0.50,
         min_coverage=0.25,
         min_lexical=0.80,
         min_coverage_high=0.50,
@@ -189,6 +206,12 @@ def _validate(thresholds: Thresholds, path: Path) -> None:
         value = getattr(thresholds, name)
         if not 0.0 <= value <= 1.0:
             raise ConfigError(f"{name} in {path} must be within [0, 1], got {value}")
+    if thresholds.min_dense_alone < thresholds.min_dense:
+        raise ConfigError(
+            f"min_dense_alone ({thresholds.min_dense_alone}) must be at least min_dense "
+            f"({thresholds.min_dense}) in {path}: the uncorroborated dense branch has no "
+            "coverage to support it, so an equal or lower bar would weaken the gate"
+        )
     if thresholds.min_coverage_high < thresholds.min_coverage:
         raise ConfigError(
             f"min_coverage_high ({thresholds.min_coverage_high}) must be at least "

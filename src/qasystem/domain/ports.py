@@ -16,6 +16,11 @@ class Embedder(Protocol):
 
     model_id: str
     dimension: int
+    #: Network requests issued so far. This is the number the provider is rate-limited on
+    #: and the number `ingest_log.embed_requests` reports, so it must count HTTP requests
+    #: and not calls to `embed()`: one call fans out into `MAX_ITEMS_PER_BATCH`-sized
+    #: batches, which made the log under-report by up to 32x (D46).
+    requests: int
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Return one vector per input, in the same order."""

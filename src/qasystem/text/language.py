@@ -8,9 +8,9 @@ nothing routes on this value.
 from __future__ import annotations
 
 from qasystem.domain.models import Language
+from qasystem.text.normalize import _LATIN_RANGES  # one definition, shared with the tokenizer
 
 _FA_RANGES = ((0x0600, 0x06FF), (0x0750, 0x077F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF))
-_LATIN_RANGES = ((0x0041, 0x005A), (0x0061, 0x007A), (0x00C0, 0x024F))
 # Below this share of letters, treat a document as not meaningfully in that script.
 _MIN_RATIO = 0.2
 

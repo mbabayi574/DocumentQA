@@ -28,6 +28,7 @@ MODEL = "Bge-m3"
 def thresholds(**overrides: Any) -> Thresholds:
     base: dict[str, Any] = {
         "min_dense": 0.60,
+        "min_dense_alone": 0.70,
         "min_coverage": 0.30,
         "min_lexical": 0.80,
         "min_coverage_high": 0.50,
@@ -52,6 +53,23 @@ def signals(**overrides: Any) -> GateSignals:
     return GateSignals(**base)
 
 
+def write_thresholds(path: Path, /, **overrides: Any) -> None:
+    """Write a thresholds file, overriding only what a test is about."""
+    payload: dict[str, Any] = {
+        "version": 3,
+        "model_id": MODEL,
+        "calibrated": True,
+        "min_dense": 0.50,
+        "min_dense_alone": 0.55,
+        "min_coverage": 0.20,
+        "min_lexical": 0.70,
+        "min_coverage_high": 0.40,
+        "min_sentence_overlap": 0.10,
+    }
+    payload.update(overrides)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 # ---------------------------------------------------------------- the rule
 
 
@@ -73,11 +91,42 @@ def test_weak_signals_refuse() -> None:
     assert verdict.reason == "below_threshold"
 
 
-def test_a_dense_hit_without_coverage_refuses() -> None:
-    """The whole point: a semantically close chunk that never contains the query's words."""
-    verdict = evaluate(signals(max_dense=0.95, lexical=0.95, token_coverage=0.20), thresholds())
+def test_a_dense_hit_between_the_two_bars_refuses() -> None:
+    """Close, but not close enough to stand uncorroborated.
+
+    The first cut of this test asserted that *any* dense hit without coverage must refuse.
+    That is precisely the defect D47 found: coverage counts shared tokens, so the
+    cross-lingual case -- an English question against a Persian source -- has coverage 0 by
+    construction, and the rule then refused the system's own headline capability. The
+    uncorroborated branch replaces that blanket refusal with a higher bar.
+    """
+    verdict = evaluate(signals(max_dense=0.65, lexical=0.95, token_coverage=0.20), thresholds())
     assert verdict.passed is False
     assert verdict.reason == "below_threshold"
+
+
+def test_a_strong_dense_hit_without_coverage_passes_as_dense_only() -> None:
+    """The cross-lingual case: coverage is unavailable, so dense similarity must be enough."""
+    verdict = evaluate(signals(max_dense=0.95, lexical=0.0, token_coverage=0.0), thresholds())
+    assert verdict.passed is True
+    assert verdict.reason == "dense_only"
+
+
+def test_the_uncorroborated_branch_needs_a_higher_dense_bar() -> None:
+    """It must never be easier than the corroborated branch, or it would weaken the gate."""
+    t = thresholds()
+    assert t.min_dense_alone > t.min_dense
+    weak = evaluate(signals(max_dense=0.65, token_coverage=0.0), t)
+    strong = evaluate(signals(max_dense=0.65, token_coverage=0.30), t)
+    assert weak.passed is False and strong.passed is True
+
+
+def test_dense_only_is_reported_distinctly_from_dense_plus_coverage() -> None:
+    """The reason string is the audit trail for which evidence authorised the answer."""
+    corroborated = evaluate(signals(max_dense=0.95, token_coverage=0.6), thresholds())
+    alone = evaluate(signals(max_dense=0.95, token_coverage=0.0), thresholds())
+    assert corroborated.reason == "dense+coverage"
+    assert alone.reason == "dense_only"
 
 
 def test_coverage_without_any_similarity_refuses() -> None:
@@ -110,7 +159,9 @@ def test_similarity_thresholds_are_inclusive(field: str, value: float, expected:
         "lexical": value if field == "lexical" else 0.0,
         "token_coverage": 0.60,
     }
-    assert evaluate(signals(**overrides), thresholds()).passed is expected
+    # min_dense_alone is pinned above too: the uncorroborated dense branch would otherwise
+    # pass these regardless, and the boundary under test would prove nothing.
+    assert evaluate(signals(**overrides), thresholds(min_dense_alone=1.0)).passed is expected
 
 
 @pytest.mark.parametrize(
@@ -127,7 +178,8 @@ def test_coverage_thresholds_are_inclusive_and_branch_specific(
     coverage: float, dense: float, expected: bool
 ) -> None:
     verdict = evaluate(
-        signals(max_dense=dense, lexical=0.99, token_coverage=coverage), thresholds()
+        signals(max_dense=dense, lexical=0.99, token_coverage=coverage),
+        thresholds(min_dense_alone=1.0),
     )
     assert verdict.passed is expected
 
@@ -180,21 +232,7 @@ def test_the_shipped_defaults_are_flagged_uncalibrated() -> None:
 
 def test_thresholds_load_from_json(tmp_path: Path) -> None:
     path = tmp_path / "thresholds.json"
-    path.write_text(
-        json.dumps(
-            {
-                "version": 3,
-                "model_id": MODEL,
-                "calibrated": True,
-                "min_dense": 0.5,
-                "min_coverage": 0.2,
-                "min_lexical": 0.7,
-                "min_coverage_high": 0.4,
-                "min_sentence_overlap": 0.1,
-            }
-        ),
-        encoding="utf-8",
-    )
+    write_thresholds(path, min_dense=0.5)
     loaded = load_thresholds(path, model_id=MODEL)
     assert loaded.version == 3
     assert loaded.calibrated is True
@@ -204,21 +242,7 @@ def test_thresholds_load_from_json(tmp_path: Path) -> None:
 def test_thresholds_for_another_model_are_refused(tmp_path: Path) -> None:
     """Thresholds from one model must never answer for another (the I9 rule, one layer up)."""
     path = tmp_path / "thresholds.json"
-    path.write_text(
-        json.dumps(
-            {
-                "version": 3,
-                "model_id": "some-other-model",
-                "calibrated": True,
-                "min_dense": 0.5,
-                "min_coverage": 0.2,
-                "min_lexical": 0.7,
-                "min_coverage_high": 0.4,
-                "min_sentence_overlap": 0.1,
-            }
-        ),
-        encoding="utf-8",
-    )
+    write_thresholds(path, model_id="some-other-model")
     with pytest.raises(ConfigError, match="some-other-model"):
         load_thresholds(path, model_id=MODEL)
 
@@ -251,42 +275,28 @@ def test_the_shipped_thresholds_file_is_well_formed_and_uncalibrated() -> None:
 
 def test_a_threshold_outside_the_unit_interval_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "thresholds.json"
-    path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "model_id": MODEL,
-                "calibrated": True,
-                "min_dense": 1.5,
-                "min_coverage": 0.2,
-                "min_lexical": 0.7,
-                "min_coverage_high": 0.4,
-                "min_sentence_overlap": 0.1,
-            }
-        ),
-        encoding="utf-8",
-    )
+    write_thresholds(path, min_dense=1.5)
     with pytest.raises(ConfigError):
         load_thresholds(path, model_id=MODEL)
+
+
+def test_the_uncorroborated_bar_below_the_corroborated_one_is_refused(tmp_path: Path) -> None:
+    """A hand-edited file must not be able to make the weaker branch the easier one."""
+    write_thresholds(tmp_path / "t.json", min_dense=0.50, min_dense_alone=0.40)
+    with pytest.raises(ConfigError, match="min_dense_alone"):
+        load_thresholds(tmp_path / "t.json", model_id=MODEL)
+
+
+def test_the_shipped_defaults_keep_both_bar_orderings() -> None:
+    """`defaults()` is what a missing file falls back to, so its ordering must hold too."""
+    shipped = defaults(MODEL)
+    assert shipped.min_dense_alone >= shipped.min_dense
+    assert shipped.min_coverage_high >= shipped.min_coverage
 
 
 def test_coverage_high_below_coverage_is_refused(tmp_path: Path) -> None:
     """The lexical branch is only stricter if the two bars are ordered."""
     path = tmp_path / "thresholds.json"
-    path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "model_id": MODEL,
-                "calibrated": True,
-                "min_dense": 0.5,
-                "min_coverage": 0.6,
-                "min_lexical": 0.7,
-                "min_coverage_high": 0.2,
-                "min_sentence_overlap": 0.1,
-            }
-        ),
-        encoding="utf-8",
-    )
+    write_thresholds(path, min_coverage=0.6, min_coverage_high=0.2)
     with pytest.raises(ConfigError):
         load_thresholds(path, model_id=MODEL)

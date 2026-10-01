@@ -2,11 +2,16 @@
   "version": 1,
   "model_id": "Bge-m3",
   "calibrated": false,
-  "min_dense": 0.62,
+  "min_dense": 0.47,
+  "min_dense_alone": 0.50,
   "min_coverage": 0.25,
   "min_lexical": 0.80,
   "min_coverage_high": 0.50,
   "min_sentence_overlap": 0.15,
-  "dataset_size": 0,
-  "notes": "CONSERVATIVE PLACEHOLDERS, NOT MEASURED. Plan P7 ships these so the gate is auditable from the first commit; P9 grid-searches them on the dev split and rewrites this file with calibrated=true plus the dataset size and class balance. min_dense sits above the measured similarity of irrelevant pairs; min_coverage_high is higher than min_coverage so the lexical branch is the stricter of the two. Thresholds are keyed on model_id and a mismatched file is refused, never reused."
+  "dataset_size": 18,
+  "measured_bands": {
+    "answerable_max_dense": [0.501, 0.631],
+    "unanswerable_max_dense": [0.359, 0.451]
+  },
+  "notes": "NOT CALIBRATED. The two dense bars are measured, not guessed: a live run over the committed corpus with real BGE-M3 gave max_dense 0.501-0.631 for answerable questions and 0.359-0.451 for unanswerable ones, and both bars clear the irrelevant band. min_dense_alone is the higher of the two because that branch has no corroborating coverage -- it exists for the cross-lingual case, where coverage is structurally zero because there are no shared tokens (D47). min_coverage_high is higher than min_coverage so the lexical branch is the stricter of the two. EVIDENCE LIMIT: 18 questions, hand-picked, mostly from a 7-chunk Persian PDF. That is enough to reject a guess that sat inside the answerable range and not enough to call anything calibrated. P9 grid-searches on the dev split and rewrites this file with calibrated=true. Thresholds are keyed on model_id and a mismatched file is refused, never reused."
 }

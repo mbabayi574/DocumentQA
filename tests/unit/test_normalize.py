@@ -128,3 +128,60 @@ def test_the_chunk_hash_ignores_line_layout() -> None:
 
     assert chunk_hash(("s",), "alpha\nbeta") == chunk_hash(("s",), "alpha  beta")
     assert chunk_hash(("s",), "alpha\nbeta") != chunk_hash(("s",), "alphabeta")
+
+
+# ---------------------------------------------------------------- D45
+
+
+def test_a_latin_word_glued_to_persian_is_still_a_token() -> None:
+    """A script transition is a word boundary.
+
+    The Persian PDFs in this corpus write Persian and Latin with no space at all. Before
+    this, "models-embedding-below" indexed as one token, so the English word "embedding" was
+    unmatchable by any query -- which broke the cross-lingual claim and left a correct
+    document at coverage 0.00 against an English question (D45).
+    """
+    from qasystem.text.tokenize import tokenize
+
+    assert "embedding" in tokenize("مدل‌هایembeddingزیر")
+    assert "openapi" in tokenize("●مستنداتOpenAPIهمراه")
+    assert "pdf" in tokenize("ازPDFمتنی")
+    assert set(tokenize("مدل‌هایembeddingزیر")) >= {"embedding", "مدل", "های", "زیر"}
+
+
+def test_an_english_query_can_cover_a_persian_line_that_embeds_a_latin_word() -> None:
+    """The gate's coverage signal, end to end: the question's terms must be findable."""
+    from qasystem.answering.sentences import token_coverage
+
+    line = "در دسترس شما به مدل‌هایembeddingزیر در اختیار شما قرار می‌گیرد"
+    assert token_coverage("embedding", line) == 1.0
+    assert token_coverage("OpenAPI", "●مستنداتOpenAPIهمراه با S"[:20]) == 1.0
+
+
+def test_a_script_boundary_does_not_split_an_identifier() -> None:
+    """Digits, hyphens and dots stay inside one token: ERR-404 is one identifier."""
+    from qasystem.text.tokenize import tokenize
+
+    for identifier in ("ERR-404", "v2.3.1", "bge-m3", "a1b2", "S3", "x86_64"):
+        assert tokenize(identifier) == [identifier.lower()], identifier
+
+
+def test_a_script_boundary_does_not_disturb_zwnj_compounds() -> None:
+    from qasystem.text.tokenize import tokenize
+
+    # ZWNJ still yields the compound, the fused form and both parts (D8).
+    assert tokenize("می‌رود") == ["می‌رود", "میرود", "می", "رود"]
+    assert normalize_for_index("می‌رود\nمی رود") == "می‌رود می رود"
+
+
+def test_script_boundary_normalization_is_idempotent() -> None:
+    for text in ("مدل‌هایembeddingزیر", "●مستنداتOpenAPIهمراه", "aبc", "بa"):
+        once = normalize_for_index(text)
+        assert normalize_for_index(once) == once
+
+
+def test_pure_latin_and_pure_persian_are_untouched() -> None:
+    from qasystem.text.tokenize import tokenize
+
+    assert tokenize("clean code fundamentals") == ["clean", "code", "fundamentals"]
+    assert set(tokenize("پایگاه دانش")) == {"پایگاه", "دانش"}

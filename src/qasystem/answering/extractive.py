@@ -143,6 +143,8 @@ def build_answer(
     """Select sentences across candidates and assemble the answer.
 
     Candidates arrive fused, best first, and the sentence budget is spent in that order.
+    That ordering is a contract, not a detail: the cross-lingual fallback below quotes
+    ``candidates[0]`` because it is the chunk the fuser most believes answers the question.
     What stops one long chunk from consuming the whole answer is ``min_sentence_overlap``:
     a chunk's sentences that do not speak to the question are never eligible, so a chunk
     only gets sentences it actually earned.
@@ -169,7 +171,13 @@ def build_answer(
             )
         )
     if not picks:
-        return refuse("below_threshold", language=language)
+        # Every sentence scored zero, which means the question and the retrieved text share
+        # no token at all -- the cross-lingual case. `min_sentence_overlap` is then measuring
+        # nothing, and refusing here discards evidence the gate already accepted and that a
+        # live run showed is retrievable (D48). Quote the best chunk instead; the padding
+        # suppression still applies everywhere else, because this branch only runs when
+        # there is nothing to pad with.
+        return _quote_best_chunk(candidates, max_sentences, evidence_score, language=language)
 
     segments, citations = _assemble(picks, candidates)
     if not segments:
@@ -179,6 +187,47 @@ def build_answer(
         answer=" ".join(f"{segment.text} [{segment.citation_id}]" for segment in segments),
         segments=tuple(segments),
         citations=tuple(citations),
+        evidence_score=evidence_score,
+        language=language,
+    )
+
+
+def _quote_best_chunk(
+    candidates: Sequence[Candidate],
+    max_sentences: int,
+    evidence_score: float,
+    *,
+    language: str,
+) -> Answer:
+    """The cross-lingual fallback: quote the best chunk, cited precisely.
+
+    ponytail: the sentences are chosen by position, not by relevance, because with no shared
+    token there is nothing to rank them on. Bounded at MAX_ANSWER_SENTENCES, and the citation
+    still names the document, version, section and page, so a reader who asked in one language
+    and reads the other can find the passage immediately. Sentence-level cross-lingual ranking
+    needs an embedding per sentence -- P9's `SENTENCE_RERANK`, measured before it lands.
+    """
+    best = candidates[0]
+    sentences = split_sentences(best.text)
+    if not sentences:
+        return refuse("below_threshold", language=language)
+    # A prefix of the chunk's sentences, so one contiguous slice from the first to the last.
+    # No per-sentence loop is needed: `split_sentences` leaves only whitespace between
+    # consecutive sentences, so a prefix can never contain a gap to bridge.
+    chosen = sentences[:max_sentences]
+    start, end = chosen[0].start, chosen[-1].end
+    segment = Segment(
+        text=best.text[start:end],
+        citation_id=1,
+        chunk_id=best.chunk_id,
+        chunk_char_start=start,
+        chunk_char_end=end,
+    )
+    return Answer(
+        status="answered",
+        answer=f"{segment.text} [1]",
+        segments=(segment,),
+        citations=(_citation(1, best),),
         evidence_score=evidence_score,
         language=language,
     )

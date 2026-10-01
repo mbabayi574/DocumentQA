@@ -51,10 +51,17 @@ dense-and-answer.
 ### Why the choice holds
 
 1. **Multilingual, which is a requirement here.** The corpus and the queries are bilingual.
-   Cross-lingual English-question → Persian-source retrieval worked with no translation
+   Cross-lingual English-question → Persian-source retrieval works with no translation
    step, no language detector, and no per-language index. A single multilingual model
    removes an entire class of bugs — misrouted queries, language filters, per-language
    collections — that invariant I9 would otherwise have to police.
+
+   *Live-verified, and it has a measured cost.* An English question is retrieved and
+   answered from the Persian PDF. But retrieval has to do it alone: token coverage counts
+   *shared* tokens, so it is structurally zero for a cross-lingual hit, and admitting one
+   costs a **1-in-9 false-answer rate** that the embedding's cosine cannot separate from a
+   real one. `docs/DECISIONS.md` D47–D48 has the numbers, and `plan.md` §12 puts the
+   trade-off to the human rather than hiding it behind a tuned-looking constant.
 2. **Cheapest at the quality we measured.** Smallest dimension, lowest latency, and no
    measured retrieval gain available from the larger models on this corpus. Their extra
    cost buys nothing here.

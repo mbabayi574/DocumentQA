@@ -8,7 +8,9 @@ they are invisible in an editor, which is exactly how they get lost.
 
 from __future__ import annotations
 
+import re
 import unicodedata
+from functools import lru_cache
 
 # Written as escapes: these characters are invisible in an editor, which is
 # exactly how they get silently lost from a source file.
@@ -35,6 +37,13 @@ _KEEP_INVISIBLE = frozenset({ZWNJ, ZWJ})
 
 TATWEEL = "\u0640"  # ـ
 
+# Where Latin letters live. A *script* boundary is a word boundary: the Persian PDFs in this
+# corpus write "models-embedding-below" and "documentation-OpenAPI-with" with no space at all,
+# so without this the English word becomes part of one giant token and is unmatchable by any
+# query -- which defeats the cross-lingual claim and starves the gate's coverage signal (D45).
+_LATIN_RANGES = ((0x0041, 0x005A), (0x0061, 0x007A), (0x00C0, 0x024F))
+_SCRIPT_TRANSITION = re.compile(r"([A-Za-z\u00C0-\u024F])")
+
 
 def normalize_for_index(text: str) -> str:
     """NFKC, letter and digit folding, invisible-char removal, whitespace collapse.
@@ -50,5 +59,24 @@ def normalize_for_index(text: str) -> str:
         elif unicodedata.category(char) == "Cc":
             kept.append(" ")  # a control character is whitespace, not nothing (D37)
         elif char != TATWEEL and unicodedata.category(char) not in _DROP_CATEGORIES:
+            if kept and _is_script_boundary(kept[-1], char):
+                kept.append(" ")
             kept.append(char)
     return " ".join("".join(kept).split())
+
+
+def _is_script_boundary(previous: str, char: str) -> bool:
+    """True where a Latin letter touches a non-Latin letter, and vice versa.
+
+    Letters only, never digits or punctuation, so ``ERR-404``, ``v2.3.1``, ``bge-m3`` and
+    ``U+06F0`` folding are all unaffected -- they are one identifier, not two words.
+    """
+    if not previous or not (previous.isalpha() and char.isalpha()):
+        return False
+    return _is_latin(previous) is not _is_latin(char)
+
+
+@lru_cache(maxsize=512)
+def _is_latin(char: str) -> bool:
+    codepoint = ord(char)
+    return any(start <= codepoint <= end for start, end in _LATIN_RANGES)

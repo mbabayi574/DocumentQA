@@ -87,7 +87,7 @@ Every value was measured on this machine against the live service. Re-run
 | **32 items/request is the throughput peak** (29.7 chunks/s; 23.6 at 64, 28.2 at 128) | `MAX_ITEMS_PER_BATCH=32`. Do not "optimise" this upward. |
 | **Cost per character falls steeply with item length**: 105 ms per 1 000 chars at 500-char items, 36 ms at 2 000, 11 ms at 8 000 — **2.9x** then **9.5x** cheaper than 500 | Chunk size is the biggest cost lever, but it trades against retrieval precision. **P9 experiment, not a change** — `CHARS_PER_TOKEN=1.5` sizes for the densest text (tables), so real chunks average ~500 chars against a 40 949-char budget. |
 | **120 req/min; real ingest needs 31 req/min** | `RATE_LIMIT_PER_MIN=100` leaves headroom. Ingest cost is dominated by request count, not characters. |
-| **Multilingual: English question → Persian source with no translation step** | No language routing, no translation, no per-language collection. One collection serves both languages; `detect_language` is a stored label, not a routing decision. |
+| **Multilingual: English question → Persian source with no translation step** — **verified live, with a cost** | No language routing, no translation, no per-language collection. One collection serves both languages; `detect_language` is a stored label, not a routing decision. Live-verified: an English question retrieves and is answered from the Persian PDF. **But** `token_coverage` counts *shared tokens*, so coverage is structurally 0 for a cross-lingual hit — the gate needs an uncorroborated `dense_only` branch (D47) and the answerer needs a positional fallback (D48), and that branch carries a measured **1-in-9 false-answer rate** the cosine cannot separate from a real one (D47). See §12. |
 | **The `index` response field is a permutation, but the API does not guarantee it** | Validate it is a permutation of `0..n-1`; otherwise use response order and log a warning. Cheap insurance against silently mislabelled vectors (D21). |
 | **`Retry-After` is absent on 429** | Capped exponential backoff with jitter is the real path. Honour the header if a provider ever sends it. |
 | **403 for a model the account cannot use**, with the allowed IDs in the message | `EmbeddingAuthError` carries the allowed list. 401/403 and other 4xx fail fast — never retried. |
@@ -306,6 +306,11 @@ MAX_ITEMS_PER_BATCH=32               # measured throughput peak
 RATE_LIMIT_PER_MIN=100               # measured ceiling 120; real ingest needs 31
 CANDIDATES_N=30  OVERFETCH=2  TOP_K=5  RRF_K=60
 DENSE_WEIGHT=0.7  LEXICAL_WEIGHT=0.3 # starting point only; P9 decides (see §2)
+# config/thresholds.json (keyed on model_id; a mismatched file is refused):
+GATE min_dense=0.47  min_dense_alone=0.50  min_coverage=0.25  min_lexical=0.80
+#   min_coverage_high=0.50  min_sentence_overlap=0.15   calibrated=false
+#   Measured live: answerable max_dense 0.501-0.631, unanswerable 0.359-0.451.
+#   The previous guess of 0.62 sat INSIDE the answerable range and was dead (D47).
 ```
 
 ---
@@ -350,6 +355,7 @@ Gates passed; `docs/DECISIONS.md` has the evidence. These constraints must not r
 | **P4** embeddings | discovery, dimension probe, three-bound batching, token bucket, bounded retry, caching | `index` trusted only if a permutation (D21); the per-item cap is enforced locally, before any request (D22); scrub provider messages before they reach an exception (D23) |
 | **P5** storage | schema, repository, FTS5 lexical, Chroma adapter, reconcile + `rebuild`, single-owner lock | explicit `BEGIN`/`COMMIT` (D25); `ensure_collection()` takes no args (D27); `rebuild` accepts a tripwire embedder it never calls, so "zero API calls" is asserted rather than claimed (D28) |
 | **P7** retrieval + gate + answering | `fusion.py` weighted RRF over the **candidate union**, `gate.py` auditable two-branch rule keyed on `model_id`, `service.py` retrieve → gate → answer, `sentences.py` + `extractive.py` selection only | `normalize_for_index` was **deleting newlines** (category `Cc`), fusing the last word of every line onto the first word of the next — every FTS token and every `chunk_hash` for multi-line text was wrong (D37); ranks are 1-based everywhere, so RRF never divides by `k` for the best hit (D38); a weight of **0 disables** an arm, or §9.2's single-arm baselines would silently mix two systems (D39); the gate judges the whole window and only `top_k` sizes the answer (D40); coverage is the max over candidates, so a fusion bug cannot present as a gate refusal (D41); thresholds for another model are a hard `ConfigError`, a missing file only falls back to uncalibrated defaults (D42); Persian coverage loses 0.29 to Ezafe suffixes, the largest known weakness of the lexical arm (D43) |
+| **P7-live** live verification | 14 live tests (`RUN_LIVE=1`), FakeEmbedder → real BGE-M3 | a Latin word glued to Persian script was **unmatchable** — `\w` spans both scripts, so `embedding` never existed as a token, breaking the lexical arm and the coverage signal (D45); `embed_requests` counted `embed()` calls not HTTP requests, a **32× error** in the number §2 and §9.2 report (D46); the gate **could not authorise cross-lingual retrieval** because coverage is structurally 0 there, so the dense arm needed an uncorroborated branch (D47) — and then the *answerer* refused the same evidence for the same reason until it got a positional fallback (D48); the shipped `min_dense = 0.62` was measured to sit **inside** the answerable range, so the dense branch was dead (D47) |
 | **P6** ingestion | `diff.py` multiset diff, `service.py` add/replace/delete/reconcile, all 12 gate tests | embedding runs **outside** the write lock and before any version exists, so an embed failure costs nothing (D33); VERIFY refuses a partial vector write; a failed version **keeps** its row as `failed` while a superseded one is fully purged (D35); a best-effort cleanup step needs its own assertions, because no correctness test can fail when it is deleted (D34); `embed_requests` is a delta and `reconcile` returns the plan it **found** (D36) |
 
 ---
@@ -713,5 +719,17 @@ Reviewer questions, each answered by a named test:
 2. **Chunk size** — raising `CHUNK_TARGET_TOKENS` toward 2 000-char chunks is worth ~2.9×
    throughput per character (9.5× at 8 000). Confirm it stays a P9 experiment, since it
    trades against retrieval precision.
-3. **Live API during P9** — calibration and sweeps need `RUN_LIVE=1` and the real token.
-   Everything else runs offline.
+3. **Cross-lingual retrieval versus the false-answer target — the one that needs a decision.**
+   A live run measured that these cannot both hold at 5%: admitting an English question answered
+   from a Persian source requires accepting uncorroborated dense hits, and one question whose answer
+   is nowhere in the corpus (`قفل کردن نسخه`, dense 0.527) is admitted at the same similarity as
+   the genuinely cross-lingual ones (0.519 / 0.528). **1 false answer in 9**, against §9.3's ≤5%
+   target. Three options, and they are a product trade rather than a tuning one:
+   **(a)** raise `min_dense_alone` — the false answer goes, cross-lingual goes with it;
+   **(b)** keep it and accept a false-answer rate above target, documented;
+   **(c)** gate uncorroborated hits on something other than cosine — a second lexical probe, or a
+   language-aware signal.
+   Recommended: **(c)**, with **(b)** as the interim. Also note the corpus is 84% one Persian book,
+   so the measured bands are not balanced; P9's own corpus decides this properly.
+4. **Live API during P9** — calibration and sweeps need `RUN_LIVE=1` and the real token.
+   Everything else runs offline. 14 live tests now exist and pass.

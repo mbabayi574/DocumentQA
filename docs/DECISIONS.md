@@ -933,3 +933,194 @@ happy path pays nothing for the distinction.
 
 M6, M13 and M14 were **green before their tests existed**. M13 in particular was green *because*
 the test's comparison was lossy, which is the failure mode D44 is about.
+
+---
+
+# Live verification against the real provider
+
+The first time P0–P7 code met real BGE-M3 vectors. **Four defects, all invisible offline**, plus
+one shipped threshold that was measured to be dead. Every answerable question below was verified
+present in the corpus by tokenizing it before the run — the first attempt used eight invented
+questions and four of them were not in the corpus at all, so the gate was right to refuse them and
+the run measured nothing.
+
+## D45 — a Latin word glued to Persian script was unmatchable (D45)
+
+The Persian PDFs in this corpus write Persian and Latin with no space: `مدل‌هایembeddingزیر`
+("models-embedding-below") and `●مستنداتOpenAPIهمراه`. `\w` matches both scripts, so the
+tokenizer produced `هایembeddingزیر` — one token — and **the word `embedding` did not exist in the
+index**. No query could ever match it.
+
+Consequences, all silent:
+
+- The headline claim "English question → Persian source" worked only through the dense arm. The
+  lexical arm and **the gate's coverage signal** could not see the term at all.
+- `مدل embedding` measured `token_coverage = 0.000` on the chunk containing both words.
+- After the fix it measures 1.000.
+
+Fixed where every caller routes through, by treating a **script transition as a word boundary** —
+letters only, so `ERR-404`, `v2.3.1`, `bge-m3`, `a1b2` and the ZWNJ compounds are untouched:
+
+```python
+        elif char != TATWEEL and unicodedata.category(char) not in _DROP_CATEGORIES:
+            if kept and _is_script_boundary(kept[-1], char):
+                kept.append(" ")
+```
+
+`language.py` now imports `_LATIN_RANGES` from `normalize.py` rather than keeping a second copy.
+
+**This is D37's sibling.** Both are "the tokenizer disagreed with the document about where words
+end", and both were found by a test whose premise happened to need a real bilingual document. If
+one more parser or corpus arrives, the check to write is not a spot-check of tokens — it is
+"tokenize a real line and read the tokens".
+
+## D46 — `embed_requests` counted calls, not requests — a 32× error (D46)
+
+The live ingest line read `total_embed_requests=5` for 1225 chunks. Impossible at
+`MAX_ITEMS_PER_BATCH=32`.
+
+`CachingEmbedder.requests` counted calls to `embed()`; `EmbeddingClient.embed()` fans that out into
+batches, each one an HTTP request. So the log understated every ingest by up to 32×.
+
+That number is not cosmetic. §2 states "ingest cost is dominated by request count, not characters",
+§9.2 reports "ingest embed-request count", and the provider is rate-limited at 120/min. A figure
+32× too small makes the cost model and the quota analysis wrong.
+
+Fixed by counting where the requests actually happen and putting it in the port, because the metric
+is a contract two phases depend on:
+
+```python
+class Embedder(Protocol):
+    #: Network requests issued so far. ... must count HTTP requests and not calls to `embed()`
+    requests: int
+```
+
+`EmbeddingClient._post_embeddings` increments it; `CachingEmbedder.requests` delegates. After the
+fix the same ingest reads **43** for the whole corpus (39 at 32 items/batch, plus per-document
+char-limit splits and the dimension probe) — which matches §2's "a whole fixture corpus ingests in
+33 requests" for a smaller corpus, and confirms it. Cache-hit behaviour is unchanged: the caller
+wants a delta, and a hit issues nothing.
+
+## D47 — the gate could not authorise the system's own headline capability (D47)
+
+The worst of the four, and the one live-only.
+
+`token_coverage` counts **shared tokens**. For the cross-lingual case §2 is built around — an
+English question against a Persian source — coverage is not merely unmet but **structurally zero**.
+The rule required coverage on the dense branch, so the dense arm could never authorise anything on
+its own. Measured, English question against the Persian-only corpus:
+
+| question | max_dense | lexical | coverage | verdict (before) |
+|---|---|---|---|---|
+| which programming language and tools are free to use | 0.519 | 0.000 | 0.000 | **refused** |
+| what documentation must accompany the code repository | 0.528 | 0.000 | 0.000 | **refused** |
+| what are the important parts to test | 0.469 | 0.000 | 0.000 | refused |
+
+Retrieval was right every time — 0.519 and 0.528 sit well above the irrelevant band (0.359–0.451).
+The gate refused correctly-retrieved evidence because the one signal that could corroborate it did
+not exist in that situation.
+
+The rule now has three disjuncts for three evidentiary situations, not one rule pretending they are
+the same:
+
+```text
+passed = (max_dense >= min_dense       AND coverage >= min_coverage)   # dense agrees with terms
+      OR (max_dense >= min_dense_alone)                                 # uncorroborated: cross-lingual
+      OR (lexical   >= min_lexical     AND coverage >= min_coverage_high)  # exact identifiers
+```
+
+`min_dense_alone` must exceed `min_dense` — the branch with nothing supporting it cannot be the
+easier one — and `load_thresholds` now refuses a file that violates it, exactly as it already
+refused `min_coverage_high < min_coverage`.
+
+## D48 — and the answerer then threw the evidence away (D48)
+
+Fixing the gate was not enough, and this is why a live run beats a mutation check: the gate started
+passing and the **answerer** refused next, for the same underlying reason.
+
+`min_sentence_overlap = 0.15` scored every sentence 0 — with no shared token, every sentence's
+overlap is 0 — and `select_sentences` returned nothing. So the system retrieved, gated, and cited
+correctly, and then returned `insufficient_information` anyway.
+
+Fixed with a branch that runs **only when nothing anywhere qualifies**, so the padding suppression
+the plan asks for is untouched in the normal case:
+
+```python
+    if not picks:
+        # Every sentence scored zero, which means the question and the retrieved text share
+        # no token at all -- the cross-lingual case. ... (D48)
+        return _quote_best_chunk(...)
+```
+
+The fallback quotes the best chunk's first `MAX_ANSWER_SENTENCES` sentences as one contiguous
+slice, with a full citation. ponytail: those sentences are chosen by **position, not relevance**,
+because with no shared token there is nothing to rank them on. The citation still names document,
+version, section and page, so a reader who asked in one language and reads the other can find the
+passage. Sentence-level cross-lingual ranking needs an embedding per sentence — P9's
+`SENTENCE_RERANK`, to be measured before it lands.
+
+Writing it also produced dead code on the first attempt: a per-sentence loop that merged adjacent
+spans, which cannot fire, because a *prefix* of a sentence list never has a gap to bridge. Deleted
+in favour of one span from the first to the last chosen sentence.
+
+## The shipped `min_dense = 0.62` was measured to be dead
+
+Against 16 live questions:
+
+| | min | max |
+|---|---|---|
+| answerable `max_dense` | 0.501 | 0.631 |
+| unanswerable `max_dense` | 0.359 | 0.451 |
+
+0.62 sits **inside the answerable range**. Six of eight answerable questions scored below it, so the
+dense branch could never be the deciding signal — it contributed nothing, and a future edit could
+only have made it worse. It was a plausible-looking number with no measurement behind it.
+
+Now `min_dense = 0.47` and `min_dense_alone = 0.50`, both clearing the measured irrelevant band.
+After the change: **7/7 genuinely-answerable questions answered, 8/8 unanswerable refused**, plus
+the four live gates.
+
+### The honest cost: one false answer, and no threshold removes it
+
+`قفل کردن نسخه` ("locking a version") is **not** in the corpus — `قفل` does not appear in any
+document — and the uncorroborated branch answered it at dense 0.527. So the measured tally over
+nine truly-unanswerable questions is **one false answer, 11%**.
+
+And it cannot be tuned away. The three cross-lingual questions that must be admitted score 0.519,
+0.528 and 0.469; the false answer scores 0.527. No bar on this signal both admits the first three
+and rejects the last. **BGE-M3's cosine, over short queries against these documents, does not
+separate "right language, wrong topic" from "wrong language, right topic"** — the two cases differ
+in something other than similarity.
+
+This is the plan's requirement 3 (relevant retrieval) and requirement 5 (false-answer rate ≤5%)
+in genuine tension, and it is a product decision, not a tuning one:
+
+- raise `min_dense_alone` → the false answer goes, cross-lingual goes with it;
+- keep it → cross-lingual works, with a false-answer rate that fails §9.3's target;
+- gate on something else for uncorroborated hits — a second lexical probe, a language-aware
+  similarity, or the answerable-question rate the human is willing to trade.
+
+**Put to the human in plan.md §12.** What is not acceptable is shipping 0.62 and describing it as
+tuned.
+
+## Evidence limits, stated plainly
+
+- **16 questions, hand-picked, mostly from one 7-chunk Persian PDF.** Enough to reject a guess
+  that sat inside the answerable range; nowhere near enough to call anything calibrated.
+  `calibrated` stays `false`, `/ready` reports it, and P9 grid-searches on the dev split.
+- `justforfun_book_a4.pdf` is 1025 of 1225 chunks (84%), so the corpus is not balanced. §2's
+  0.359–0.451 irrelevant band was measured on a corpus dominated by one Persian book.
+- Retrieval **quality** was not measured here — only whether the gate's signals separate. That is
+  P9's R@1/R@3/MRR job, and these numbers must not be quoted as retrieval quality.
+- Live tests assert *structure and reachability*, never an exact tuned value, so a provider change
+  shows up as a failure rather than as a silently different threshold.
+
+## Live-run mutation results
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M16 | gate refuses the uncorroborated dense branch (the D47 defect) | `test_a_strong_dense_hit_without_coverage_passes_as_dense_only`, `test_dense_only_is_reported_distinctly...` |
+| M17 | `min_dense_alone` below `min_dense` | `test_the_shipped_defaults_keep_both_bar_orderings`, `test_..._below_the_corroborated_one_is_refused` |
+| M18 | answerer's cross-lingual fallback removed (the D48 defect) | 3 tests in `test_extractive.py` |
+| M19 | fallback ignores the sentence budget | `test_the_fallback_respects_the_sentence_budget` |
+| M20 | fallback fires even when a sentence matched (padding returns) | `test_a_matching_sentence_is_preferred_over_an_earlier_one` + 2 integration tests |

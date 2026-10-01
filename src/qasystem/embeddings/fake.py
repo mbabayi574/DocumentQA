@@ -26,6 +26,8 @@ class FakeEmbedder:
             raise ValueError(f"dimension must be positive, got {dimension}")
         self.dimension = dimension
         self.model_id = model_id
+        # Network requests issued. The fake has no network, so this equals its call count,
+        # which is exactly what the port's `requests` means (see domain/ports.py).
         self.requests = 0
         self.texts_embedded = 0
 
@@ -35,6 +37,8 @@ class FakeEmbedder:
         return [self._vector(text) for text in texts]
 
     def reset(self) -> None:
+        # Network requests issued. The fake has no network, so this equals its call count,
+        # which is exactly what the port's `requests` means (see domain/ports.py).
         self.requests = 0
         self.texts_embedded = 0
 

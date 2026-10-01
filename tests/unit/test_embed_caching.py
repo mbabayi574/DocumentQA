@@ -160,3 +160,39 @@ async def test_a_whitespace_change_is_a_different_cache_entry() -> None:
     await embedder.embed(["Handbook > Install"])
     await embedder.embed(["Handbook >Install"])
     assert inner.texts_embedded == 2
+
+
+# ---------------------------------------------------------------- D46
+
+
+async def test_requests_counts_network_requests_not_embed_calls() -> None:
+    """One `embed()` call fans out into batches; the counter must count the batches.
+
+    Counting calls understated a real 1225-chunk ingest as 5 instead of 39 -- a 32x error in
+    the number `ingest_log` records and §9.2 reports (D46).
+    """
+
+    class FanOut:
+        """One `embed()` call, one request per item -- what MAX_ITEMS_PER_BATCH does live."""
+
+        model_id = "fanout"
+        dimension = 4
+
+        def __init__(self) -> None:
+            self.requests = 0
+
+        async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+            self.requests += len(texts)
+            return [[0.0] * self.dimension for _ in texts]
+
+    inner = FanOut()
+    embedder = CachingEmbedder(inner, CountingCache())
+    before = embedder.requests
+
+    await embedder.embed(["one", "two", "three"])
+
+    assert embedder.requests - before == 3, "not one: the fan-out is invisible"
+    # And a cache hit still costs nothing, which is what the delta in ingest relies on.
+    again = embedder.requests
+    await embedder.embed(["one", "two", "three"])
+    assert embedder.requests == again

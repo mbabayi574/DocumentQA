@@ -51,9 +51,6 @@ class CachingEmbedder:
         self._cache = cache
         self._query_lru_size = query_lru_size
         self._query_lru: MutableMapping[str, list[float]] = {}
-        # Requests actually sent upstream, so ingest_log.embed_requests is measured
-        # rather than inferred from a diff.
-        self.requests = 0
 
     @property
     def model_id(self) -> str:
@@ -62,6 +59,18 @@ class CachingEmbedder:
     @property
     def dimension(self) -> int:
         return self._inner.dimension
+
+    @property
+    def requests(self) -> int:
+        """Network requests issued, delegated to the wrapped embedder (D46).
+
+        Deliberately *not* a count of this object's `embed()` calls. One such call fans out
+        into up to `MAX_ITEMS_PER_BATCH` HTTP requests, so counting calls understated a real
+        1225-chunk ingest as 5 requests instead of 39 -- a 32x error in the number
+        `ingest_log` records and §9.2 reports. Caching is unaffected: the *delta* is what
+        the caller wants, and a cache hit issues no request at all.
+        """
+        return self._inner.requests
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
@@ -92,7 +101,6 @@ class CachingEmbedder:
         return vector
 
     async def _embed(self, texts: Sequence[str]) -> list[list[float]]:
-        self.requests += 1
         return await self._inner.embed(texts)
 
     def _get(self, model_id: str, hashes: Sequence[str]) -> dict[str, list[float]]:

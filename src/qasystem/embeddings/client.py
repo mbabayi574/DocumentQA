@@ -101,6 +101,8 @@ class EmbeddingClient:
         # Filled in by start(); empty until then, so nothing can use a wrong dimension.
         self.model_id = ""
         self.dimension = 0
+        # Network requests issued, counted in _post_embeddings (D46).
+        self.requests = 0
         self.available_models: tuple[str, ...] = ()
         self.limiter = limiter if limiter is not None else RateLimiter(settings.rate_limit_per_min)
         self._sleep = sleep
@@ -186,6 +188,11 @@ class EmbeddingClient:
         return payload
 
     async def _post_embeddings(self, batch: Sequence[str]) -> list[list[float]]:
+        # Counted here, not in `embed`, because this is where one HTTP request is one call:
+        # `embed` fans out into batches, and a counter there would under-report by up to
+        # MAX_ITEMS_PER_BATCH (D46). Retries are not counted; §2 prices the endpoint by the
+        # request the limiter admits, and a retry is the same call arriving twice.
+        self.requests += 1
         body = {"model": self.model_id, "input": list(batch)}
         for attempt in range(self.settings.max_retries + 1):
             await self.limiter.acquire()
