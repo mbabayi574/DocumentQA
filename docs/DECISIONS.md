@@ -99,3 +99,46 @@ which is unreadable for a vocabulary.
 readability win here.
 **Lesson:** when a linter's fix is worse than the code, scope the rule out and say why
 in a comment, rather than fighting it per line.
+
+## D10 — TXT and Markdown sections are trimmed; PDF sections are pages (P2)
+
+**Context:** a blank-line-separated block in TXT spans its trailing newline, and a
+Markdown block spans its trailing blank lines. Both produce citation excerpts ending
+in whitespace.
+**Decision:** trim surrounding whitespace from every section's char span. The slice is
+still a verbatim slice of `text` (I6 holds), it just does not quote the blank line.
+**Evidence:** `test_crlf_is_normalized_to_lf` expects `"First."`, not `"First.\n"`.
+
+## D11 — Markdown `hr` tokens are skipped, fenced code is kept (P2)
+
+**Context:** parsing `storyen.md` produced 77 sections of which **10 were `---`**.
+**Decision:** skip `hr` block tokens; keep `fence` blocks, because a fenced YAML or
+shell snippet is genuine content a user may search for.
+**Evidence:** sections dropped 77 → 67 on `storyen.md` with no prose lost. A section
+made only of `---` would otherwise become a junk chunk with no retrieval value.
+
+## D12 — PDF sections are per page, and no OCR, no RTL reversal (P2)
+
+**Context:** a PDF's heading structure is not reliably recoverable without font
+heuristics; and `justforfun_book_a4.pdf` (plan.md §2.3) stores Persian in lossy
+presentation forms whose order no reversal or NFKC pass can restore.
+**Decision:** one section per page that carries text, breadcrumb `<title> > page N`
+with exact 1-based page numbers. A PDF where no page yields text raises
+`NoTextLayerError` whose message says OCR is unsupported. **No RTL reversal anywhere.**
+**Evidence:** `ai-engineer.pdf` yields 7 text-bearing sections across 8 pages — page 1
+is blank and correctly skipped without voiding the document
+(`test_blank_page_does_not_void_the_document`). Persian extracts correctly
+(`test_persian_pdf_text_is_readable_not_reversed`).
+**Rejected:** font-size heading detection. It is a heuristic on a fixture set of two
+PDFs; a wrong heading is a wrong citation path, which is worse than page granularity.
+
+## D13 — RUF001 ignored project-wide, with a reason (P2)
+
+**Context:** P1 scoped the rule out inline on the stopword list. P2 then hit it again in
+Persian test literals, so the inline approach would have grown a `noqa` on every line
+containing Persian.
+**Decision:** `ignore = ["RUF001"]` in `pyproject.toml`, with the reason in a comment:
+this project is bilingual by requirement, so Arabic/Persian letters are content, not
+homoglyph attacks. The security property that actually matters — that confusable input
+cannot forge a different query — is covered by the normalization and tokenizer tests,
+not by this lint rule.

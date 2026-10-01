@@ -40,6 +40,11 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# RUF001 flags Arabic/Persian letters as ASCII-confusable (ه vs o, ا vs l). This
+# project is bilingual by requirement (plan.md A1), so those characters are content,
+# not homoglyph bugs. Confusables that matter for identifiers are covered by
+# normalization and tokenizer tests, not by this rule.
+ignore = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.12"

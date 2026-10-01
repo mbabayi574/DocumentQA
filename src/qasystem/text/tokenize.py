@@ -19,7 +19,6 @@ _VERSION_RE = re.compile(r"v?\d+(?:\.\d+)+")
 _EN = "a an and are as at be but by for from has have he her his i in is it its of on or "
 _EN += "she that the their them they this to was were what when where which who will with "
 _EN += "you your not no do does did can could should would"
-# ruff: noqa: RUF001 - Persian letters are not ASCII look-alikes here
 _FA = (
     "و در به از که این را با است برای آن یک تا هم بر یا می شود اما های ها بود "
     "گفت کرد کند شد هر دو نیز همه دیگر"
