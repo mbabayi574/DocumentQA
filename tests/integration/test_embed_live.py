@@ -19,7 +19,7 @@ from pydantic import SecretStr
 
 from qasystem.config import load_settings
 from qasystem.embeddings.client import EmbeddingClient
-from qasystem.errors import EmbeddingAuthError
+from qasystem.errors import ConfigError, EmbeddingAuthError
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_LIVE") != "1", reason="set RUN_LIVE=1 to call the real provider"
@@ -28,9 +28,16 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 async def live_client() -> Any:
-    settings = load_settings()
+    # A clean clone has no .env and therefore no token. That must skip, not error, so
+    # `make live` is usable there (D31).
+    try:
+        settings = load_settings()
+    except ConfigError as exc:
+        pytest.skip(f"live run needs a configured provider: {exc.code}")
     if settings.is_fake_provider:
         pytest.skip("EMBEDDING_PROVIDER=fake; nothing live to call")
+    if settings.embedding_api_key is None:
+        pytest.skip("EMBEDDING_API_KEY is not set")
     async with EmbeddingClient(settings) as client:
         yield client
 
