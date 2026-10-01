@@ -1639,3 +1639,61 @@ than the hard cap — a corpus change, not something to smuggle in by inflating 
   payload, it would invalidate P7's live tests, and it buys nothing measurable. P10/P11.
 * **The gate was not redesigned** to add a second signal to the uncorroborated branch. §12
   question 3 reserves that for a human, and the measurement is now in front of them.
+
+## D66 — the human's answers to §12 Q3 and the evidence standard, and what they commit us to
+
+Two questions P9 could measure but not decide. Both are now answered, and both change work
+rather than just documentation.
+
+### Q3 (the cross-lingual branch): **give it a second signal**
+
+P9's measurement closed off the alternatives rather than choosing between them. Holding a 0%
+false-answer rate *is* giving up the uncorroborated branch: `min_dense_alone` must exceed
+0.609 to refuse `n03`, and the real cross-lingual hits measure 0.513–0.547. So (a) and (b) were
+never alternatives — the choice was between the calibrated state, (c), and dropping cross-lingual
+entirely. **(c) was chosen**, and it is a P10 item with `docs/eval_report.md` as its acceptance
+test.
+
+What P9 already eliminated, so P10 does not re-measure it: a second **lexical** probe is the only
+viable direction, and an **IDF-weighted coverage** is not. Measured margin over a single threshold
+across all 50 questions — plain coverage **+0.86**, `max_dense` **+0.79**, `rare_terms` **+0.45**,
+`bm25span` **+0.17**, IDF-weighted coverage **+0.23**. IDF fails because in a six-document corpus
+a near-topic question's terms are *all* rare, so weighting them by rarity hands an irrelevant
+chunk the same score a relevant one gets.
+
+So the candidates that remain, in the order worth trying:
+
+1. **A cross-lingual lexical probe.** Take the question's tokens, transliterate or
+   otherwise project them into the candidate's script, and re-measure coverage. The signal
+   `token_coverage` cannot provide is *does the candidate share meaning-bearing tokens once the
+   script barrier is removed* — which is exactly what it currently reports as a structural 0.
+2. **Script-aware segment matching.** Split each candidate's ZWNJ compounds and compare
+   stems, since D43 measured Persian coverage losing 0.29 to Ezafe suffixes. Cheaper than (1)
+   and stackable with it.
+
+Either way the acceptance condition is the same and it is the one P9 could not meet: the branch
+must answer the four cross-lingual eval cases *and* refuse all twelve unanswerable ones. Until
+that holds on both splits, the branch stays as calibrated and cross-lingual stays documented as
+unreliable (D61).
+
+### The evidence standard: **hold the system to `gold quoted`**
+
+`false answers` and `R@k` are the plan's stated criteria and both are strong (0 of 12, R@1 0.76).
+But D60 showed they are blind to a failure that matters more to a caller: an answered question
+citing a document that does not contain the answer. A citation is a claim that its source
+supports the answer, so the number that measures requirement 4 of `jobTask.md` is the share of
+gold facts present in the text the system quotes — currently **0.91 dev, 0.88 held out**.
+
+`gold quoted` is therefore promoted from an added diagnostic to **the acceptance metric for
+requirement 4**, and the three causes D60 named are P10's work list, each separately actionable:
+
+| cause | cases | what it needs |
+|---|---|---|
+| retrieval — wrong document cited | `x01`, `x08`, `m05` | the §12 Q3 fix, or the lexical-arm correction from D55 |
+| truncation — gold chunk at window position 10, below `top_k=5` | `fa02` | a `TOP_K` decision, traded against answer length |
+| answerer — sentence scores 0.067 against a 0.15 bar while the sentence beside it scores 0.153 | `m01` | a signal that connects "what port" to a literal; **not** a lower bar, which would pad every answer |
+
+No target number was set, deliberately: 0.88 is the measured floor and the target is to raise it
+by removing causes, not by picking a threshold that happens to be passable today. The number is
+reported per split, in the report's tables, and in the `eval` command's JSON, so it is visible
+without opening the report.

@@ -72,7 +72,7 @@ P0 ✓ scaffold    P1 ✓ text     P2 ✓ parsing   P3 ✓ chunking   P4 ✓ emb
 | 1 | Process PDF, TEXT, Markdown for retrieval | One parser per format → `ParsedDocument` (source text + char/page/line offsets). Normalised tokens feed FTS5; chunk slices feed the embedder. **Stored text is never rewritten**, so citations stay exact. | P1–P2 unit tests per format; P3 slice-identity tests |
 | 2 | Add/edit/delete; never use outdated content | Monotonic versions per `doc_id`. Publication is **one SQLite transaction** flipping `current_version`. One `eligible_chunks` view gates **every** retrieval path, so stale and deleted rows are unreachable even if Chroma cleanup never ran. Chroma is derived and disposable. | P6 tests 1–12: idempotency, edit isolation, delete with cleanup fault-injected, failure injection, crash recovery |
 | 3 | Relevant retrieval | Hybrid: dense (local Chroma, cosine) + lexical (FTS5 `bm25`), fused by weighted RRF over the **candidate union** (§9.1). Candidate scores carry raw dense similarity, `bm25`, and token coverage for the gate. | P7 fusion/eligibility tests; P9 R@1/3/5 and MRR@5 for dense-only vs lexical-only vs hybrid |
-| 4 | Evidence-based, traceable answers | Extractive answerer returns source slices only. Citations carry doc, version, section path, page, lines, chunk id, char span, exact excerpt. | P7: every segment is an exact substring of its chunk **and** of `source_text` at the recorded offsets; mutation test proves the check bites |
+| 4 | Evidence-based, traceable answers | Extractive answerer returns source slices only. Citations carry doc, version, section path, page, lines, chunk id, char span, exact excerpt. | P7: every segment is an exact substring of its chunk **and** of `source_text` at the recorded offsets; mutation test proves the check bites. **P9: `gold quoted` is the acceptance metric** — 0.91 dev / 0.88 held out — because substring validity says a citation is *faithful*, not that its source *contains the answer* (D60, D66) |
 | 5 | Say so when information is insufficient | An evidence gate runs **before** any answer text is selected. Below threshold → `status="insufficient_information"`, `citations=[]`, a fixed localised system message, a machine-readable `reason`. "Closest" chunks are never presented as citations. | P7 unanswerable tests (near-topic, off-topic, empty KB); P9 false-answer rate ≤5%, preference 0% |
 | 6 | API access, no GUI | FastAPI + OpenAPI: upload/update/delete/query/health/ready, plus a maintenance CLI. No GUI dependency. | P8 `TestClient` per endpoint; `scripts/smoke_test.sh` |
 | 7 | Readability, separation of concerns, error handling, tests | `api → services → domain/ports ← adapters`. Typed errors with stable codes and HTTP mapping. A port exists only where a second implementation or a test seam needs one. I1–I10 are release-blocking tests. | `make check`; clean clone green; coverage ≥85% on `text/ parsing/ chunking/ ingestion/ retrieval/ answering/`; P11 readability pass |
@@ -596,9 +596,16 @@ Every answerable case uses **chunking-independent gold**: `{"doc": "handbook.md"
 dev/test 60/40 **before** looking at results.
 
 **9.2 Metrics**, for dense-only, lexical-only, and hybrid: R@1/3/5, MRR@5, unanswerable
-false-answer rate, answerable refusal rate, citation substring validity (must be 100%),
-stale-content leakage (must be 0), P50/P95 query latency, index size, ingest embed-request
-count.
+false-answer rate, answerable refusal rate, **gold quoted**, citation substring validity (must
+be 100%), stale-content leakage (must be 0), P50/P95 query latency, index size, ingest
+embed-request count.
+
+`gold quoted` — the share of gold phrases appearing in a chunk the answer actually cites — is
+**the acceptance metric for requirement 4**, added because the rest of this list is blind to an
+answered question citing a document that does not contain the answer (D60). A citation asserts
+its source supports the answer, so this is the number requirement 4 is actually about. Measured
+0.91 dev / 0.88 held out; no target number is set, because the target is to remove the causes
+rather than to pick a passable threshold (D66).
 
 **9.3 Calibration.** Grid-search the gate on the **dev** split, maximising answerable recall
 subject to unanswerable false-answer rate ≤5%, preferring 0% because the task is
@@ -641,6 +648,22 @@ lexical-only; README quotes them; thresholds calibrated and committed; invariant
 
 ### P10 — Hardening
 
+- **Raise `gold quoted`**, the acceptance metric for requirement 4 (D66). The three causes are
+  already named per case in `docs/eval_report.md` and each is separately actionable: three
+  answered questions cite the wrong document (needs the §12 Q3 fix below), one gold chunk sits at
+  window position 10 below `top_k=5`, and one sentence scores 0.067 against a 0.15 overlap bar
+  while the sentence beside it scores 0.153.
+- **Give the uncorroborated dense branch a second signal** (§12 Q3, answered as (c)). Acceptance:
+  answer all four cross-lingual eval cases *and* refuse all twelve unanswerable ones. P9 already
+  eliminated the cheap alternative — an IDF-weighted coverage measures a +0.23 separation margin
+  against plain coverage's +0.86, because in a six-document corpus a near-topic question's terms
+  are all rare and rarity hands an irrelevant chunk the same score. The candidates that remain are
+  a cross-lingual lexical probe (project the question's tokens into the candidate's script and
+  re-measure coverage) and script-aware ZWNJ/Ezafe-aware matching (D43).
+- **Remove `min_lexical`**, which is a threshold on a saturated signal: `lexical_score` is bm25
+  divided by the best bm25 of the same query, so the top hit is exactly 1.0 for every query FTS
+  matched, and the value is 1.00 for 49 of 50 eval questions regardless of class (D58). P10 owns
+  the gate-contract change; P9 deliberately did not make it.
 - Run §11's checklist and close gaps. Coverage ≥85% on `text/`, `parsing/`, `ingestion/`,
   `retrieval/`, `answering/`.
 - A regression test for every bug found along the way.

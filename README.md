@@ -67,9 +67,16 @@ is worth 0.05 recall — so these are operating points, not constants.
 distinguishes them, and it exists because §9.2's list did not: an answered question that cites
 a document which does not contain the answer passes the refusal rate, the R@k, and the citation
 *validity* check. On the held-out split 12% of the facts the system claims to have answered are
-not in the text it quotes. Every case is named with its cause in
-[`docs/eval_report.md`](docs/eval_report.md) — three cite the wrong document, one is a `top_k`
-truncation, one is a sentence the overlap bar correctly refuses.
+not in the text it quotes.
+
+**`gold quoted` is the acceptance metric for requirement 4** — a citation asserts its source
+supports the answer, so substring validity ("the quote is faithful") is not the same claim as "the
+source contains the answer". Every failing case is named with its cause in
+[`docs/eval_report.md`](docs/eval_report.md): three cite the wrong document, one is a `top_k`
+truncation (the gold chunk sits at window position 10, below `top_k=5`), and one is a sentence
+the overlap bar correctly refuses — it scores 0.067 against a 0.15 bar while the sentence beside
+it, which talks *about* the port without containing the number, scores 0.153 and is quoted
+instead. No target number is set: the target is to remove the causes.
 
 ### Why the choice holds
 
