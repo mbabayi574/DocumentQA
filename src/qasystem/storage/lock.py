@@ -29,8 +29,15 @@ class DataLock:
 
     @property
     def is_held(self) -> bool:
-        """True when this object currently owns the directory."""
-        return self._lock is not None and self._lock.is_locked
+        """True when this object currently owns the directory.
+
+        Deliberately *not* asking ``FileLock.is_locked``: that counter is thread-local, so a
+        readiness check running on a request thread saw "not locked" while the process
+        plainly held it, and ``/ready`` returned 503 forever (D50). ``acquire()`` succeeding
+        and ``release()`` clearing the attribute is the truth about *this process*, which is
+        the only question L2 asks.
+        """
+        return self._lock is not None
 
     def acquire(self) -> None:
         """Take ownership, or raise ``StorageLockedError`` immediately (L2)."""

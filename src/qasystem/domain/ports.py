@@ -12,15 +12,27 @@ from qasystem.domain.models import ParsedDocument, VectorHit, VectorItem
 
 
 class Embedder(Protocol):
-    """Turns text into vectors. Implementations may be remote or offline."""
+    """Turns text into vectors. Implementations may be remote or offline.
 
-    model_id: str
-    dimension: int
-    #: Network requests issued so far. This is the number the provider is rate-limited on
-    #: and the number `ingest_log.embed_requests` reports, so it must count HTTP requests
-    #: and not calls to `embed()`: one call fans out into `MAX_ITEMS_PER_BATCH`-sized
-    #: batches, which made the log under-report by up to 32x (D46).
-    requests: int
+    Identity and the request counter are read-only: an embedder's model and dimension do not
+    change over its life, and ``CachingEmbedder`` exposes them as properties because it
+    delegates. Declaring them as mutable variables here contradicted every implementation.
+    """
+
+    @property
+    def model_id(self) -> str:
+        """The model's identity, as the provider reports it. Never from configuration."""
+
+    @property
+    def dimension(self) -> int:
+        """Vector width, probed once rather than configured."""
+
+    @property
+    def requests(self) -> int:
+        """Network requests issued so far. This is the number the provider is rate-limited
+        on and the number `ingest_log.embed_requests` reports, so it must count HTTP
+        requests and not calls to `embed()`: one call fans out into `MAX_ITEMS_PER_BATCH`
+        sized batches, which made the log under-report by up to 32x (D46)."""
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Return one vector per input, in the same order."""

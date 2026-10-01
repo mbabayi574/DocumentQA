@@ -1124,3 +1124,170 @@ tuned.
 | M18 | answerer's cross-lingual fallback removed (the D48 defect) | 3 tests in `test_extractive.py` |
 | M19 | fallback ignores the sentence budget | `test_the_fallback_respects_the_sentence_budget` |
 | M20 | fallback fires even when a sentence matched (padding returns) | `test_a_matching_sentence_is_preferred_over_an_earlier_one` + 2 integration tests |
+
+---
+
+# P8 — API, observability, operations
+
+Five defects, and again **every one of them needed the real wiring**. Four were found by the
+API layer's own tests; one was found by writing a bash script.
+
+## D49 — SQLite connections were thread-bound (D49)
+
+`sqlite3.connect` defaults to `check_same_thread=True`, so a connection created in one thread
+raises `ProgrammingError` when used from another. Every offline test passed because the store
+was built and used in the same thread.
+
+The moment the app existed, the two were different threads — the lifespan builds the graph, a
+request handler uses it — and **every single endpoint 500'd**. Not one of the 480 offline tests
+had an app with a lifespan.
+
+```python
+        # check_same_thread=False because the connection is built in the lifespan and used
+        # from request threads. Safe here because of the two guarantees this project already
+        # makes: L2's data-directory lock means one *process* owns the file, and the
+        # application write lock means one coroutine at a time mutates it. (D49)
+        self._db = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
+```
+
+The safety argument is not hand-waving: L2 and the write lock are the reason there is no
+concurrency problem to solve, and Python's `sqlite3` is compiled `SERIALIZED`
+(`sqlite3.threadsafety == 3`), so the C layer still serialises access.
+
+> **The generalisable lesson, and the second time it has appeared here.** D45–D48 were all
+> "the fake embedder is not the real embedder". D49 is "the test never built the thing". A
+> test suite that constructs each collaborator and calls each function *in one thread* can be
+> green while the composition is impossible. Composition needs its own test, and the cheapest
+> honest one is an app factory plus a real request.
+
+## D50 — `filelock`'s `is_locked` is thread-local, so `/ready` 503'd forever (D50)
+
+`DataLock.is_held` asked `FileLock.is_locked`. That counter is **thread-local**: the lock was
+acquired in the lifespan's thread and queried from a request's, so `/ready` reported
+`lock_held: false` and returned 503 permanently — while the process plainly held the lock.
+Under uvicorn both share one loop thread, which is why this would have looked fine in
+development and been a coin flip in production.
+
+```python
+        # Deliberately *not* asking ``FileLock.is_locked``: that counter is thread-local, so a
+        # readiness check running on a request thread saw "not locked" while the process
+        # plainly held it, and ``/ready`` returned 503 forever (D50).
+        return self._lock is not None
+```
+
+`acquire()` succeeding and `release()` clearing the attribute *is* the truth about this
+process, which is the only question L2 asks.
+
+## D51 — an uncalibrated placeholder is not another model's measurement (D51)
+
+D42 refused a thresholds file whose `model_id` differed from the embedder's. Wiring the API
+surfaced the consequence: **the fake provider could not start at all**, because the only
+thresholds file in the repository belongs to BGE-M3 and no fake-model file will ever exist.
+
+The fix keeps D42's guarantee and draws the line where the difference actually is:
+
+| the file is | for another model | decision |
+|---|---|---|
+| `"calibrated": true` | measured numbers | **`ConfigError`** — real values must never answer for the wrong model |
+| `"calibrated": false` | placeholders | warn, use uncalibrated defaults |
+
+D42's promise is "another model's **measurements** never answer here". A placeholder has no
+measurements, so substituting it for a placeholder is not a leak. Before this, `demo` mode was
+unstartable; now it starts and reports `calibrated: false`, which is the truth.
+
+## D52 — `SQLITE_PATH` and `CHROMA_PATH` were configured and did nothing (D52)
+
+`build_services` derived both store paths from `data_dir`. The two settings existed in
+`config.py`, appeared in `.env.example`, and were silently ignored — so pointing them
+elsewhere appeared to work and did not.
+
+Found only because a CLI test wanted to make the store fail, set `SQLITE_PATH` to a
+directory, and got a healthy report back.
+
+```python
+    sqlite_path = Path(data_dir) / "qasystem.db" if data_dir is not None else settings.sqlite_path
+    chroma_path = Path(data_dir) / "chroma" if data_dir is not None else settings.chroma_path
+```
+
+`data_dir` remains a test seam that redirects both stores at a tmpdir; without it, the
+configured paths are authoritative. A setting that is read but not honoured is worse than one
+that does not exist, because it is a lie you can act on.
+
+## D53 — a test the harness was silently overriding (D53)
+
+`test_an_unexpected_error_is_500_with_no_stack_trace` needed the response a *server* sends.
+Starlette's `ServerErrorMiddleware` builds the 500 and then **re-raises** so the server can
+log it, and `TestClient` propagates that. So the first two attempts — `raise_server_exceptions
+=False`, then `ASGITransport` — both still raised, and I was about to conclude the handler was
+broken.
+
+It was not. `ASGITransport` needs `raise_app_exceptions=False` as well, and the test now uses
+it. Worth recording because the symptom looked exactly like a missing exception handler, and
+the "fix" a real team reaches for at 3am is to catch the exception in the route — which would
+have broken every other error path to work around a test harness.
+
+## The `Embedder` port declared identity as mutable (D53b)
+
+`model_id`, `dimension` and `requests` were declared as plain attributes. Every implementation
+exposes them as read-only properties (`CachingEmbedder` delegates), so the port was describing
+something none of them were. They are now properties in the protocol, with the D46 note on
+`requests` kept.
+
+## What the smoke test caught that the Python tests did not
+
+`scripts/smoke_test.sh` runs against a **real socket**, a real `uvicorn`, and a real
+`data/` directory — the only test in the project that does. It found three things:
+
+1. **`curl -f` aborts on the expected 404.** Half the script asserts 404s, and `-f` makes curl
+   exit non-zero, which `set -e` treats as a script failure. Now `status_of` branches on the
+   status code instead.
+2. **`assert version == 2` is wrong.** Versions are monotonic and never reused, so a smoke run
+   against a live store reports v7. The assertion is now `+1`, which is the actual property.
+3. **The script could not be re-run.** A second run POSTed into a store that already held the
+   document and got a 409 — correct behaviour, wrong test. It now removes its own document
+   first, because there is deliberately no delete-all endpoint and a smoke test has to
+   establish its own precondition.
+
+And two properties verified only there, both of which the plan requires:
+
+* A **second `uvicorn` on the same `data/` refuses to start** — verified by starting one for
+  real and reading the log: `StorageLockedError: ... run a single worker (uvicorn --workers 1)`.
+  The first instance kept serving.
+* The whole add → query → edit → query → delete → query cycle, asserting **content** at each
+  transition rather than status codes: the superseded `ERR-404` is unreachable after the edit,
+  the new `ERR-503` is answerable, a re-upload spends zero embedding requests, and after the
+  delete both are unreachable.
+
+## A lock holder must keep a reference (re-learned)
+
+P5 recorded that a temporary holding a `DataLock` is garbage-collected and releases it. I
+reintroduced exactly that in the new L2 test — `DataLock(path).acquire()` as a bare expression
+— and spent a while bisecting whether `filelock` works across processes at all before finding
+it. It works fine; the object was simply gone, and with it the file handle and the `flock`.
+
+The new `LOCK_HOLDER` keeps the variable and says why, so the next reader does not have to
+rediscover it. Bisecting it was still worth the time: "the lock does not work" and "my test
+does not hold the lock" look identical from the outside.
+
+## `httpx` logs full URLs at INFO
+
+`httpx` emits `HTTP Request: GET http://host/path?query=...` at INFO. That is why the
+middleware's logging test is scoped to `qasystem.api.app` records rather than asserting over
+all captured output. It is not a leak here: the only `httpx` client in the system calls the
+embedding provider on a fixed path with the token in a **header**, so no user data can reach
+one of its log lines. Noted so the scoping looks deliberate rather than convenient.
+
+## P8 mutation results
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M22 | `POST /documents` silently replaces instead of 409 | `test_post_different_content_to_an_existing_doc_is_409_and_points_at_put` |
+| M23 | `PUT` resurrects a deleted document | `test_put_a_deleted_document_is_404_rather_than_resurrecting_it` |
+| M24 | the 500 handler returns the exception message | `test_an_unexpected_error_is_500_with_no_stack_trace` |
+| M25 | the middleware logs `str(url)` instead of `url.path` | `test_the_middleware_logs_the_path_and_never_the_query_string` |
+| M26 | `/ready` reports a hard-coded model id | `test_ready_reports_every_dependency` |
+| M27 | the model guard accepts another model's calibrated thresholds | 2 tests in `test_gate.py` |
+
+M25 was **green before its test existed**. Nothing else in the suite would have noticed
+`url.path` becoming `str(url)`, which is a one-character change that quietly starts logging
+every user's question.

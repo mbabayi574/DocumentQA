@@ -59,7 +59,7 @@ P6 was the highest risk, and is done; P7 is done. P8 (API) is next.
 
 ```text
 P0 ✓ scaffold    P1 ✓ text     P2 ✓ parsing   P3 ✓ chunking   P4 ✓ embeddings   P5 ✓ storage
-→ P6 ✓ ingestion → P7 ✓ retrieval+gate+answer → P8 API
+→ P6 ✓ ingestion → P7 ✓ retrieval+gate+answer → P8 ✓ API
 → P9 eval + calibration → P10 hardening → P11 refactor + README
 ```
 
@@ -363,6 +363,7 @@ Gates passed; `docs/DECISIONS.md` has the evidence. These constraints must not r
 | **P4** embeddings | discovery, dimension probe, three-bound batching, token bucket, bounded retry, caching | `index` trusted only if a permutation (D21); the per-item cap is enforced locally, before any request (D22); scrub provider messages before they reach an exception (D23) |
 | **P5** storage | schema, repository, FTS5 lexical, Chroma adapter, reconcile + `rebuild`, single-owner lock | explicit `BEGIN`/`COMMIT` (D25); `ensure_collection()` takes no args (D27); `rebuild` accepts a tripwire embedder it never calls, so "zero API calls" is asserted rather than claimed (D28) |
 | **P7** retrieval + gate + answering | `fusion.py` weighted RRF over the **candidate union**, `gate.py` auditable two-branch rule keyed on `model_id`, `service.py` retrieve → gate → answer, `sentences.py` + `extractive.py` selection only | `normalize_for_index` was **deleting newlines** (category `Cc`), fusing the last word of every line onto the first word of the next — every FTS token and every `chunk_hash` for multi-line text was wrong (D37); ranks are 1-based everywhere, so RRF never divides by `k` for the best hit (D38); a weight of **0 disables** an arm, or §9.2's single-arm baselines would silently mix two systems (D39); the gate judges the whole window and only `top_k` sizes the answer (D40); coverage is the max over candidates, so a fusion bug cannot present as a gate refusal (D41); thresholds for another model are a hard `ConfigError`, a missing file only falls back to uncalibrated defaults (D42); Persian coverage loses 0.29 to Ezafe suffixes, the largest known weakness of the lexical arm (D43) |
+| **P8** API + operations | `api/deps.py` builds the whole graph once and owns L2/L9; `api/routes.py` thin verbs; `api/app.py` lifespan + one error envelope + request-id middleware; `api/schemas.py` is the OpenAPI contract; `cli.py`; `scripts/smoke_test.sh` | SQLite connections were **thread-bound**, so a store built in the lifespan and used from a request thread raised `ProgrammingError` and **every endpoint 500'd** — invisible to 480 offline tests (D49); `filelock.is_locked` is thread-local, so `/ready` reported the lock unheld and 503'd forever (D50); `SQLITE_PATH`/`CHROMA_PATH` were configured and silently ignored (D52); the `Embedder` port declared identity as mutable when every implementation exposes it read-only |
 | **P7-live** live verification | 14 live tests (`RUN_LIVE=1`), FakeEmbedder → real BGE-M3 | a Latin word glued to Persian script was **unmatchable** — `\w` spans both scripts, so `embedding` never existed as a token, breaking the lexical arm and the coverage signal (D45); `embed_requests` counted `embed()` calls not HTTP requests, a **32× error** in the number §2 and §9.2 report (D46); the gate **could not authorise cross-lingual retrieval** because coverage is structurally 0 there, so the dense arm needed an uncorroborated branch (D47) — and then the *answerer* refused the same evidence for the same reason until it got a positional fallback (D48); the shipped `min_dense = 0.62` was measured to sit **inside** the answerable range, so the dense branch was dead (D47) |
 | **P6** ingestion | `diff.py` multiset diff, `service.py` add/replace/delete/reconcile, all 12 gate tests | embedding runs **outside** the write lock and before any version exists, so an embed failure costs nothing (D33); VERIFY refuses a partial vector write; a failed version **keeps** its row as `failed` while a superseded one is fully purged (D35); a best-effort cleanup step needs its own assertions, because no correctness test can fail when it is deleted (D34); `embed_requests` is a delta and `reconcile` returns the plan it **found** (D36) |
 
@@ -513,7 +514,26 @@ hostile FTS input stays inert.
 
 **Gate:** all green; I1, I2, I6, I7 pass through the public retrieval-and-answer entry point.
 
-### P8 — API, observability, operations
+**Status: done.** The plan's per-endpoint matrix was implemented as written, with these
+deviations, each recorded:
+
+* `POST /documents` returns **409** when the bytes differ from an existing active document and
+  names `PUT` in the message. A POST that would silently replace content is ambiguous, and a
+  caller who loses the version they thought they had is worse served than one told to be
+  explicit.
+* The service graph is built by `api/deps.py`, and **bringing the system up is `async`** —
+  discovering a model's identity requires a network call, so there is no honest synchronous
+  startup. `Services.aclose()` is async for the same reason: `httpx.AsyncClient` cannot be
+  closed synchronously.
+* `calibrate` and `eval` **report their missing precondition and exit 1** rather than
+  half-existing. Both need `tests/eval/dataset.jsonl`, which is P9's §9.1. A calibration run
+  against nothing would write numbers with no evidence behind them, which is the one thing
+  `calibrated: false` exists to prevent.
+* `/health` deliberately says nothing about dependencies. A liveness probe that fails on a
+  database outage turns a recoverable problem into a restart loop.
+* An **injected** service graph is not closed by the lifespan — the caller still holds it.
+
+### P8 — API, observability, operations — **DONE, see §8**
 
 | Method | Path | Behaviour |
 |---|---|---|
@@ -711,8 +731,10 @@ Reviewer questions, each answered by a named test:
 | Is every answer segment an exact substring of stored source text? | P7 substring + mutation test |
 | Do unanswerable questions avoid presenting "closest" evidence as citations? | P7 plan test 2 (6 cases) + M11 mutation |
 | Is `evidence_score` documented as a non-probability? | README §7 |
-| Can the model change without mixing dimensions, and are thresholds model-specific? | P5 I9 test; `thresholds.json` carries `model_id`; P7 `test_thresholds_for_another_model_are_refused` (D42) |
-| Is the token absent from source control, logs, and error bodies? | P0/P4 redaction + scrub tests |
+| Can the model change without mixing dimensions, and are thresholds model-specific? | P5 I9 test; `thresholds.json` carries `model_id`; P7/P8 tests, and only *calibrated* numbers are refused across models (D42, D51) |
+| Is the token absent from source control, logs, and error bodies? | P0/P4 redaction + scrub tests; P8 checks every response **and the access log**, which must record `url.path` and never the query string (D53) |
+| Does a second instance on the same `data/` refuse to start? | P5 lock test; P8 starts a real second `uvicorn` and reads its log (L2) |
+| Do the configured `SQLITE_PATH`/`CHROMA_PATH` actually take effect? | P8 `build_services` honours them; the bug where they were ignored is D52 |
 
 ## 12. Open questions for the human
 

@@ -181,11 +181,25 @@ def load_thresholds(path: str | Path, *, model_id: str) -> Thresholds:
         payload: Mapping[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         found = str(payload["model_id"])
         if found != model_id:
-            raise ConfigError(
-                f"thresholds in {path} were calibrated for {found!r}, but the embedder is "
-                f"{model_id!r}. Refusing to reuse another model's thresholds: re-run "
-                "`make calibrate`."
+            # Only a *calibrated* file is dangerous to reuse: it holds real measured numbers
+            # that belong to another model. An uncalibrated file is a set of placeholders, and
+            # placeholders for another model are still just placeholders -- which is what makes
+            # `fake` mode startable at all, since no fake-model thresholds will ever exist.
+            # The guarantee D42 makes is "another model's *measurements* never answer here",
+            # and that still holds: the answer is a flagged default, not a real number (D51).
+            if payload.get("calibrated"):
+                raise ConfigError(
+                    f"thresholds in {path} were calibrated for {found!r}, but the embedder "
+                    f"is {model_id!r}. Refusing to reuse another model's measurements: "
+                    "re-run `make calibrate`."
+                )
+            logger.warning(
+                "thresholds at %s are for %r and the embedder is %r; using uncalibrated defaults",
+                path,
+                found,
+                model_id,
             )
+            return defaults(model_id)
         thresholds = Thresholds(
             version=int(payload.get("version", 1)),
             calibrated=bool(payload.get("calibrated", False)),

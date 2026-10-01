@@ -247,6 +247,25 @@ def test_thresholds_for_another_model_are_refused(tmp_path: Path) -> None:
         load_thresholds(path, model_id=MODEL)
 
 
+def test_another_models_UNCALIBRATED_placeholders_are_ignored(tmp_path: Path) -> None:
+    """D51: only real measurements are refused across models, not placeholders.
+
+    The shipped file is uncalibrated and belongs to the real model, so `fake` mode can start
+    with it on disk. What must never happen is another model's *calibrated* numbers answering
+    here, and `test_thresholds_for_another_model_are_refused` pins that.
+    """
+    write_thresholds(tmp_path / "t.json", model_id="Bge-m3", calibrated=False)
+    loaded = load_thresholds(tmp_path / "t.json", model_id="fake-embedder")
+    assert loaded == defaults("fake-embedder")
+    assert loaded.calibrated is False
+
+
+def test_a_calibrated_file_for_another_model_is_still_refused(tmp_path: Path) -> None:
+    write_thresholds(tmp_path / "t.json", model_id="Bge-m3", calibrated=True)
+    with pytest.raises(ConfigError, match="Bge-m3"):
+        load_thresholds(tmp_path / "t.json", model_id="fake-embedder")
+
+
 def test_a_missing_thresholds_file_falls_back_to_uncalibrated_defaults(tmp_path: Path) -> None:
     loaded = load_thresholds(tmp_path / "absent.json", model_id=MODEL)
     assert loaded == defaults(MODEL)

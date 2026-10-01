@@ -46,7 +46,13 @@ class SqliteStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(self.path, isolation_level=None)
+        # check_same_thread=False because the connection is built in the lifespan and used
+        # from request threads. Safe here because of the two guarantees this project already
+        # makes: L2's data-directory lock means one *process* owns the file, and the
+        # application write lock means one coroutine at a time mutates it. Without this,
+        # building a store anywhere but the request thread raises ProgrammingError (D49).
+        # Python's sqlite3 is compiled SERIALIZED, so the C layer still serialises access.
+        self._db = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode = WAL")
         self._db.execute("PRAGMA foreign_keys = ON")
