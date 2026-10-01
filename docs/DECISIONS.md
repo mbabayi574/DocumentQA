@@ -1291,3 +1291,116 @@ one of its log lines. Noted so the scoping looks deliberate rather than convenie
 M25 was **green before its test existed**. Nothing else in the suite would have noticed
 `url.path` becoming `str(url)`, which is a one-character change that quietly starts logging
 every user's question.
+
+---
+
+# Whole-project live verification (real BGE-M3, full fixture corpus)
+
+`scripts/smoke_test.sh` had only ever run against the fake provider, the CLI had never touched
+the real one, I10's "zero API calls" had only ever been asserted against an embedder that makes a
+request for anything, and no live test had ever ingested more than one 7-chunk PDF. Closed all
+of that in `tests/integration/test_system_live.py`.
+
+**Result: no new defects.** 103 live tests green, 545 offline green, the full HTTP cycle green
+against real vectors. That is worth saying plainly, because it is not what the previous two live
+rounds found — and the reason is that the gaps above were *verification* gaps, not code gaps.
+What did surface were two **measurements** that P9 needs and that no offline test could produce.
+
+The two failures during this round were both my own test questions, not the system:
+
+| what I wrote | what happened | whose fault |
+|---|---|---|
+| "what does the story say about the installer checkpoints" | gate refused it | mine — `installer` and `checkpoints` appear in **no** document in the corpus. Verified by tokenizing all five before asking. |
+| `delete("justforfun_book_a4")` | `DocumentNotFoundError` | mine — the doc_id is the slug `justforfun-book-a4`, not the file stem |
+
+That is the second time this corpus has caught me inventing a question. The rule that falls out
+of it is now in the test file: **verify the terms are in the corpus before asserting the gate
+answers.** A refusal on an unanswerable question is the gate working, and a test that treats it
+as a failure is measuring nothing.
+
+## D54 — query latency is the embedding API, not the retrieval (D54)
+
+Measured on 1225 chunks with real BGE-M3, decomposed per stage:
+
+| question | embed | chroma | fts | sqlite + fusion + gate + answer |
+|---|---|---|---|---|
+| `what did the grandmother leave behind` | **1230ms** | 5ms | 0ms | 13ms |
+| `what is the boiling point of mercury…` | 286ms | 5ms | 0ms | 21ms |
+| `who is Eleanor` | 448ms | 4ms | 0ms | 13ms |
+| `BGE-M3` | 379ms | 5ms | 0ms | 16ms |
+
+**Everything this project builds costs 13–21ms. One network call costs 286–1230ms.** Retrieval,
+fusion, the evidence gate and answer assembly are together about 2–5% of query latency, and
+`embed_calls == 1` on every query, so the 1230ms outlier is provider variance and not a retry.
+
+End-to-end over the full corpus: **P50 ≈ 410ms, P95 ≈ 1.8s**, and the tail is the provider's.
+
+Two consequences for P9, and one warning:
+
+* Optimising retrieval cannot move query latency. `CANDIDATES_N`, `OVERFETCH`, `RRF_K` and the
+  gate's cost are all rounding errors against one embedding call. The levers that matter are
+  batching and serving the embedder — and, per §2, making `TOP_K` small enough that fewer
+  chunks need embedding-based reranking.
+* Do not read the P95 as our tail. A load test that reports "P95 1.8s" is reporting the
+  provider, and presenting it as ours would be a small lie with a large performance budget
+  attached.
+* `test_query_latency_is_the_embedding_api_not_the_retrieval` pins the local share under 150ms,
+  so a genuine regression in *our* work fails even though the provider still dominates.
+
+## D55 — the cross-lingual miss is the lexical arm, and no threshold can fix it (D55)
+
+The full-corpus measurement: 8/8 unanswerable refused (0% false answers), 7/10 answerable cited
+the right document. Two of the three misses are the cross-lingual ones, and both cite the wrong
+document while still *citing real text* — which is worse than a refusal, because a caller who
+asked in English cannot check Persian text they do not read.
+
+The cause is precise, and it is not the gate:
+
+```
+'what language and tools are free to use'
+  clean-code-excerpt.pdf   sim=0.471  cov=0.25  score=0.01335   <- rank 1
+  justforfun_book_a4.pdf   sim=0.541  cov=0.00  score=0.01148
+  ai-engineer.pdf          sim=0.539  cov=0.00  score=0.01129   <- rank 5, the RIGHT one
+```
+
+`0.01129 = 0.7/62`: the correct Persian chunk is **dense rank 2 and receives no lexical
+contribution at all**, because it shares no token with an English question and so can never
+collect a lexical rank. The English chunks collect lexical ranks 1–19 on incidental words
+("language", "tools", "use") and overtake it on the sum.
+
+So the dense arm — the thing that makes cross-lingual retrieval possible at all — finds the
+right chunk and then loses, because RRF sums ranks and a chunk that is mediocre on both arms
+beats a chunk that is *best* on one and *absent* from the other.
+
+**And no dense-similarity bar separates them.** Measured: the wrong chunk sits at **0.547**, the
+right one at **0.539**. Raising `min_dense_alone` kills both; lowering it admits more wrong
+ones. The parameter D47 introduced cannot solve a ranking problem.
+
+This is the third independent measurement pointing at the same place — §2's finding that 0.7/0.3
+beat 0.9/0.1, D30's finding that fusion can penalise the correct answer, and now this. The
+honest conclusion is that **for a query whose language differs from the source's, the lexical arm
+contributes noise.** The options are §9.4 experiment 1 (weights), or something the weights cannot
+express: detect that coverage is zero and drop the lexical arm's contribution for that query.
+
+That is P9's decision, not P7's, so **nothing was changed**. What was done instead is
+`test_the_cross_lingual_miss_is_the_lexical_arm_not_the_dense_bar`, which pins today's behaviour
+with the explanation attached and fails if the behaviour changes *without* the explanation being
+re-measured. It asserts all three of: the Persian chunk is retrieved; it has `similarity > 0.5`
+and `lexical_score is None`; and it still loses to an English chunk. If a future change makes it
+win, that test fails and demands the reasoning be redone.
+
+## What the corpus-level live run confirmed
+
+* **Batching holds at scale.** 1225 chunks ingest in **43** provider requests: 39 at
+  `MAX_ITEMS_PER_BATCH=32`, plus per-document character-limit splits and the dimension probe.
+  §2's "a whole corpus ingests in 33 requests" is consistent for a smaller corpus.
+* **Every published chunk has a vector**, and `eligible_chunk_ids()` matches — 1225/1225.
+* **I2 at scale**: deleting the Persian book (84% of the index, 1025 chunks) leaves the other
+  documents answerable. `پردازش اسناد` still resolves to `ai-engineer.pdf` afterwards.
+* **I10 measured, not asserted**: `rebuild` restored every real BGE-M3 vector into a fresh
+  collection while the real client's request counter did not move. Against the fake embedder
+  this test was vacuous; it now is not.
+* **The CLI works against the real provider**: `check-storage` round-trips both stores and reports
+  `Bge-m3` / 1024; `reconcile` reports in-sync on a real corpus; `rebuild` restores real vectors.
+* **P6's cost invariants hold on real vectors**: a one-paragraph edit spent exactly 1 request; a
+  section reorder and an identical re-upload spent **0**.
