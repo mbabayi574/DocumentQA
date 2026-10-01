@@ -1,7 +1,7 @@
 # LLM-free extractive document QA. Source of truth for phases: plan.md §7.
 UV := uv run
 
-.PHONY: check test run sync
+.PHONY: check check-live live live-eval test run sync
 
 sync: ## install dependencies (uv.lock is committed)
 	uv sync
@@ -11,6 +11,14 @@ check: ## gate: ruff lint + format + mypy + pytest
 	$(UV) ruff format --check src tests
 	$(UV) mypy src
 	$(UV) pytest
+
+live: ## the same tests against the REAL provider. Every phase runs this, not just `check`.
+	RUN_LIVE=1 $(UV) pytest tests/integration -q
+
+check-live: check live ## offline gate and live gate: the full definition of done
+
+live-eval: ## run the eval corpus against the real provider (P9)
+	RUN_LIVE=1 $(UV) python -m qasystem.cli eval
 
 test: ## tests only
 	$(UV) pytest

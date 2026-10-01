@@ -24,7 +24,14 @@
 
 1. **Test first.** Write the phase's *Tests first* list, watch it fail, implement, refactor.
 2. **Gate before commit.** `make check` (ruff check + format, `mypy src` strict, `pytest -q`)
-   green, the phase's Gate items pass, **and** a fresh `git clone` passes too (§0.11).
+   green, **`make live` green against the real provider**, the phase's Gate items pass, **and** a
+   fresh `git clone` passes too (§0.11).
+   > `make live` is not optional and not a nice-to-have. The fake embedder is a bag of hashed
+   > tokens: it cannot rank, cannot align languages, and its similarity scale is nothing like
+   > the real model's. P0-P7 passed 480 offline tests while the gate was **unable to authorise
+   > the system's own cross-lingual capability** (D47) and a Latin word glued to Persian script
+   > was **unmatchable** (D45). Four defects, none of them visible offline. Offline green proves
+   > the plumbing; only live proves the product.
 3. **Never weaken a test to get green.** If a test looks wrong, log it in
    `docs/DECISIONS.md`, flag it, and move on.
 4. **Measure, don't recall.** Any third-party behaviour the code depends on gets a probe
@@ -32,8 +39,9 @@
 5. **Mutation-check the important ones.** For each invariant and each safety property,
    break the code on purpose and confirm a named test fails. A test that passes for the
    wrong reason is worse than no test (D25, D26).
-6. **No network in tests.** `socket.connect` is blocked in `tests/conftest.py`. Live calls
-   only under `RUN_LIVE=1` (`scripts/measure_provider.py`, `tests/integration/`).
+6. **No network in tests.** `socket.connect` is blocked in `tests/conftest.py`. Live calls only
+   under `RUN_LIVE=1` (`scripts/measure_provider.py`, `tests/integration/*_live.py`). Every phase
+   adds its live coverage there rather than assuming the offline suite carries it.
 7. **Secrets.** `EMBEDDING_API_KEY` from env only. Never logged, printed, returned, or
    committed — including inside error bodies built from provider responses (I8, D23).
 8. **Scope guard — do NOT add:** OCR, auth, GUI, message queues, any LLM/chat call, another

@@ -2,9 +2,13 @@
 Project: LLM-free extractive document QA (FastAPI + SQLite/FTS5 + local persistent ChromaDB).
 Source of truth: plan.md (read §0–§3 + your phase only).
 
-Commands: `make check` (ruff, mypy, pytest) · `make run` · `make smoke` · `make eval` · `make calibrate`
+Commands: `make check` (ruff, mypy, pytest) · `make live` (same tests, real provider) · `make run` · `make smoke` · `make eval` · `make calibrate`
 Rules:
-- Test first. Never edit/skip tests to get green. No real network unless RUN_LIVE=1.
+- Test first. Never edit/skip tests to get green.
+- **Every phase runs `make live`, not just `make check`.** The fake embedder is a bag of hashed
+  tokens: it cannot rank, cannot align languages, and its similarity scale is nothing like the
+  real model's. The first live run found four defects that 480 offline tests could not (D45-D48),
+  including a gate that could not authorise the system's own cross-lingual capability.
 - Never print/log/commit EMBEDDING_API_KEY. `.env` and `data/` are git-ignored.
 - Chroma = chromadb.PersistentClient(path=CHROMA_PATH) ONLY. No HttpClient, no server, one worker.
 - SQLite decides what is searchable (`eligible_chunks` view). Chroma/FTS hits are candidates, never evidence.
