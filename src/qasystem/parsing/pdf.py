@@ -12,6 +12,7 @@ repair (plan.md §2.3), and mangling a citation is worse than saying so.
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 import pymupdf
@@ -65,13 +66,19 @@ def _open(data: bytes) -> Any:
 
 
 def _page_text(document: Any, number: int) -> str:
-    """Blocks sorted into reading order, joined; empty string for a blank page."""
+    """Blocks sorted into reading order, joined; empty string for a blank page.
+
+    NFKC is applied because a PDF's text is *constructed* by us, not uploaded bytes:
+    presentation-form glyphs map onto the letters a reader actually sees. Measured to
+    be a no-op on a PDF whose text layer is already clean, and the difference between
+    readable and unreadable Persian on one that is not (D14).
+    """
     try:
         blocks = document[number].get_text("blocks", sort=True)
     except Exception as exc:
         raise ParseError(f"cannot read page {number + 1}: {type(exc).__name__}") from None
     parts = [
-        block[4].strip()
+        unicodedata.normalize("NFKC", block[4]).strip()
         for block in blocks
         if len(block) > 4 and isinstance(block[4], str) and block[4].strip()
     ]

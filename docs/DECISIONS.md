@@ -142,3 +142,53 @@ this project is bilingual by requirement, so Arabic/Persian letters are content,
 homoglyph attacks. The security property that actually matters — that confusable input
 cannot forge a different query — is covered by the normalization and tokenizer tests,
 not by this lint rule.
+
+## D14 — the PDF parser applies NFKC (P2, after a full scan corrected D12)
+
+**Context:** D12 called `justforfun_book_a4.pdf` unrecoverable. That verdict came from
+reading its **raw** extraction (`ﻣﻘﺪﻣﻪ`, Arabic presentation forms) on two pages. A full
+page-by-page scan of all three PDFs contradicted it:
+
+| PDF | Pages | Text chars | Presentation-form chars | Verdict after scan |
+|---|---|---|---|---|
+| `justforfun_book_a4.pdf` | 204 | 390 139 | 233 183 | **recoverable via NFKC** |
+| `ai-engineer.pdf` | 8 | 2 240 | 0 | clean already |
+| `Clean Code….pdf` | 10 MB, 312 | 347 893 | 0 | clean, zero mojibake |
+
+Ordering was the other thing I had assumed wrong. A correct Persian line *ends* with
+punctuation; a reversed one *starts* with it. After NFKC, **980 of 1 053 content lines
+end with punctuation and only 73 start with it**, so the text is in correct reading order
+and merely needs compatibility decomposition — it was never character-reversed.
+**Decision:** the PDF parser applies NFKC to each extracted block.
+**Evidence:** byte-for-byte a **no-op** on `ai-engineer.pdf` (`test_nfkc_does_not_alter_a_clean_text_layer`),
+and the difference between unreadable and readable Persian on `justforfun`
+(`test_persian_book_is_readable_after_extraction` finds `تفریح` and asserts zero
+presentation-form codepoints survive).
+**Why NFKC is safe for I6 here:** a PDF's `ParsedDocument.text` is *constructed* by us,
+not uploaded bytes. NFKC maps presentation forms onto the letters a reader actually sees,
+so it is closer to the rendered page than the raw codepoints. Markdown and TXT text is
+still stored byte-for-byte, because there the user's bytes are the ground truth.
+**Superseded part of D12:** "no normalization recovers it" was wrong.
+
+## D15 — the 10 MB book is git-ignored; a 12-page excerpt is committed instead (P2)
+
+**Context:** the English book parses perfectly (348 204 chars) but is 10 MB and 312
+pages — too slow to parse in a test suite and too large to commit.
+**Decision:** keep the source git-ignored and commit
+`tests/fixtures/docs/en/clean-code-excerpt.pdf` (197 KB, 12 prose-dense pages, 35 886
+chars), produced once by `scripts/build_pdf_fixtures.py`.
+**Reason:** the fixture carries the same text layer for test purposes without the size.
+The original stays on disk, and `test_the_uncommitted_book_still_parses_when_present`
+asserts it still parses when a local copy exists.
+**Also:** `test_parsing_pdf_fixtures.py` parametrizes over every PDF under
+`tests/fixtures/docs/`, so the next fixture dropped in is covered without editing a test.
+
+## D16 — known ceiling: `justforfun` loses spaces on 274 of 6 563 lines (P2)
+
+**Context:** that book's font maps the space glyph to nothing on some lines, so they
+arrive as one run of letters (`فقطبرایتفریح` for `فقط برای تفریح`).
+**Decision:** accept it and state it. `test_known_limitation_some_lines_lose_their_spaces`
+pins it at under 20% of lines, so a regression that made it worse fails the suite.
+**Rejected:** Persian word segmentation to re-insert spaces. It needs a language model or
+a dictionary, would guess at boundaries, and a wrong space is a wrong token that quietly
+degrades retrieval — a larger risk than the one it removes.

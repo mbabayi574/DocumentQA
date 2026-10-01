@@ -22,4 +22,8 @@ wheels/
 .coverage
 htmlcov/
 
-/tests/fixtures/docs/
+# Small fixtures under tests/fixtures/docs/ are committed. Only the oversized
+# sample books are ignored: the 10 MB English book is parsed once by
+# scripts/build_pdf_fixtures.py, which commits a 12-page excerpt instead.
+/tests/fixtures/docs/en/Clean Code Fundamentals-Martin Hock-Leanpub-EBooksWorld.ir.pdf
+/tests/fixtures/docs/fa/justforfun_book_a4.pdf

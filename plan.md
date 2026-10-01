@@ -144,11 +144,28 @@ This is the evidence behind the single-model decision and the source material fo
 |---|---|
 | `en/storyen.md` (5.8 KB) | Usable English Markdown fixture |
 | `fa/storyfa.md` (4.7 KB) | Usable Persian Markdown fixture, contains ZWNJ |
-| `fa/ai-engineer.pdf` (8 pages) | **Usable Persian PDF.** Extracts correct Persian with `\u200c`. Page 1 has no text layer (blank), pages 2–7 carry the body |
-| `en/Clean Code Fundamentals…pdf` (10 MB, 312 pages) | Text layer is real (347 893 chars, 1 blank page) but **too large to commit or to use in a repeatable eval**. Not part of the corpus |
-| `fa/justforfun_book_a4.pdf` (204 pages) | **Unusable.** Extracts Persian in lossy presentation forms, character order reversed, ligatures decomposed to non-letters. No normalization recovers it. Excluded; documented as a known limitation |
+| `en/clean-code-excerpt.pdf` (197 KB, 12 pages) | **Committed** English PDF fixture: 35 886 chars, clean text layer, derived by `scripts/build_pdf_fixtures.py` |
+| `fa/ai-engineer.pdf` (8 pages) | **Committed** Persian PDF fixture: 2 245 chars, correct Persian with ZWNJ, page 1 blank |
+| `fa/justforfun_book_a4.pdf` (204 pages) | **Committed.** 393 534 chars of Persian. Raw glyphs are presentation forms, so **NFKC is required**; readable after it, with the space limitation below |
+| `en/Clean Code Fundamentals…pdf` (10 MB, 312 pages) | Parses perfectly (348 204 chars, zero mojibake) but too large to commit or parse per test. Git-ignored; the 12-page excerpt above stands in for it |
 
-**Corpus decision.** Stop depending on ad-hoc sample files. Author a small committed corpus under `tests/eval/corpus/`: ~6 documents across md/txt/pdf, **English and Persian both**, each 1–3 KB so a full eval run is fast and reproducible. Untrack the 10 MB PDF via `.gitignore`; track the small fixtures. The existing `storyen.md`/`storyfa.md`/`ai-engineer.pdf` stay as parser fixtures.
+**Correction to the v3 draft.** v3 called `justforfun_book_a4.pdf` "unrecoverable".
+That came from reading its *raw* extraction, which is Arabic presentation forms. A full
+page-by-page scan showed NFKC recovers both the letters and their order: of 1 053
+content lines, **980 end with sentence punctuation and only 73 start with it**, so the
+text is in correct reading order and merely needs compatibility decomposition. The PDF
+parser now applies NFKC (D14), verified byte-for-byte to be a no-op on
+`ai-engineer.pdf`, which already extracts cleanly.
+
+**Known limitation, stated rather than hidden.** `justforfun_book_a4.pdf`'s font maps
+the space glyph to nothing on 274 of 6 563 content lines, so those lines arrive as one
+run of letters. NFKC cannot invent a space the PDF never stored. Repairing it needs
+Persian word segmentation, which is out of scope; retrieval still works on the characters
+that are present. `test_known_limitation_some_lines_lose_their_spaces` pins the ceiling.
+
+**Corpus decision.** The eval corpus under `tests/eval/corpus/` is still authored from
+scratch (~6 documents, 1-3 KB each, English and Persian), so an eval run stays fast and
+reproducible. The fixtures above are what P2 parses against.
 
 ---
 
@@ -824,7 +841,8 @@ Every item here was a wrong assumption in v2, corrected by measurement in §2.
 | "Honor `Retry-After`, else backoff" | Header is absent on 429 | Backoff with jitter is the real path; honor the header if a provider ever sends it (P4) |
 | Python ≥ 3.11 | Pinned `numpy==2.5.3` requires ≥3.12 | `requires-python = ">=3.12"`, ruff/mypy targets `py312` (P0, done) |
 | Fixtures are the eval corpus | `tests/fixtures/docs/` was git-ignored; contains a 10 MB 312-page PDF | Author a small committed bilingual corpus; untrack the large PDF (§2.3) |
-| Persian PDF parsing is solvable | `justforfun_book_a4.pdf` extracts in lossy presentation forms, unrecoverable | Document as a known limitation; use `ai-engineer.pdf`, which extracts correctly (§2.3) |
+| Persian PDF parsing is solvable | **Correction: it was solvable.** v3 cleared `justforfun` as unrecoverable from a two-page probe; a full page-by-page scan found NFKC recovers it | PDF parser applies NFKC; the book is a committed fixture. Only its lost-space lines remain a stated limitation (§2.3) |
+| Only the convenient PDF gets parsed | Two of three PDFs were dismissed without a full scan | `tests/unit/test_parsing_pdf_fixtures.py` parametrizes over **every** PDF in `tests/fixtures/docs/`, so a newly added fixture is covered automatically |
 | Reviewer reads `DECISIONS.md` last | The job grades reasoning and readability explicitly | New P11 refactor pass, and `DECISIONS.md` becomes the reviewer's entry point |
 
 ---
