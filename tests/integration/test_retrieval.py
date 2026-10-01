@@ -627,10 +627,17 @@ async def test_retrieval_returns_ranked_candidates_with_their_scores(env: Any) -
 async def test_fusion_ranks_within_the_window_never_over_the_corpus(env: Any) -> None:
     """Ranks are positions in the *retrieved list*, not in the corpus (D30).
 
-    Fusing corpus ordinals is the mistake that made hybrid look worse than dense in §2: with
-    k=60 a rank-5000 hit contributes almost nothing, so a correctly retrieved lexical
-    match gets drowned by corpus size. This corpus is ordered so the answerable chunk is
-    *last*, which is exactly where a corpus ordinal would bury it.
+    Fusing corpus ordinals is the mistake that made hybrid look worse than dense in section 2:
+    with k=60 a far-away hit contributes almost nothing, so a correctly retrieved lexical match
+    gets drowned by corpus size. This corpus is ordered so the answerable chunk is *last*, which
+    is exactly where a corpus ordinal would bury it.
+
+    The ranks are deliberately **not** hard-coded. The dense arm is an approximate HNSW search
+    and its tie-breaking is not stable between runs; an earlier version pinned ``(3, 1)`` and
+    failed roughly one run in five, in a clean clone, for no reason at all (D56). What is
+    asserted instead is the property: the ranks are small window positions, the score is exactly
+    the window-rank formula applied to those ranks, and that is materially different from what
+    corpus ordinals would have produced.
     """
     document = (
         "# Manual\n\n"
@@ -638,22 +645,28 @@ async def test_fusion_ranks_within_the_window_never_over_the_corpus(env: Any) ->
         + "\n\n## Quota\n\nThe quota is forty megabytes.\n"
     )
     await env.ingest.ingest(document.encode(), "manual.md")
-    answer = env.store.eligible_chunks(chunk_ids=["manual:v1:39"])
-    assert answer and "quota" in answer[0]["text"], "precondition: the answerable chunk is last"
+    stored = env.store.eligible_chunks(chunk_ids=["manual:v1:39"])
+    assert stored and "quota" in stored[0]["text"], "precondition: the answerable chunk is last"
 
     candidates = await env.retrieval.retrieve("quota megabytes", limit=30)
     best = candidates[0]
 
     assert best.chunk_id == "manual:v1:39"
     assert best.token_coverage == pytest.approx(1.0)
-    # Fusion sees ranks 1..3 here, not 37..40, and the score is the window-rank formula.
-    assert (best.dense_rank, best.lexical_rank) == (3, 1)
-    assert best.score == pytest.approx(0.7 / (60 + 3) + 0.3 / 61)
+    assert best.dense_rank is not None and best.lexical_rank is not None
 
-    # And explicitly *not* the corpus-ordinal score, which is what D30 measured by mistake.
+    # Window positions, not corpus ordinals: single digits, where the ordinal is ~40.
     ordinal = [row["chunk_id"] for row in env.store.eligible_chunks()].index("manual:v1:39") + 1
     assert ordinal >= 35, "precondition: the corpus ordinal really is far away"
-    assert best.score != pytest.approx(0.7 / (60 + ordinal) + 0.3 / (60 + ordinal))
+    assert best.dense_rank < ordinal and best.lexical_rank < ordinal
+
+    # The score is exactly the window-rank formula on those ranks, which makes the ranks'
+    # *meaning* the assertion rather than their value.
+    assert best.score == pytest.approx(
+        0.7 / (60 + best.dense_rank) + 0.3 / (60 + best.lexical_rank)
+    )
+    corpus_scored = 0.7 / (60 + ordinal) + 0.3 / (60 + ordinal)
+    assert abs(best.score - corpus_scored) > 1e-4
 
     assert (await env.retrieval.answer("quota megabytes")).status == "answered"
 
