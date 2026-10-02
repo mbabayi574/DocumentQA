@@ -2440,3 +2440,31 @@ model's measurements, and the fake embedder reports `model_id="fake-embedder"`. 
 invariant working. But a reader who wants to try the system without a token hits a `ConfigError`
 that reads like a bug. The README now says so and names the two ways out: set a real token, or
 point `THRESHOLDS_PATH` at a file calibrated for the fake model.
+
+## D81 — `test_network_is_blocked` could never pass under `RUN_LIVE=1` (P11)
+
+**Context:** the clean-clone verification ran `RUN_LIVE=1 uv run pytest` over the whole suite —
+the command `AGENTS.md` told any agent touching the HTTP layer to run — and got 6 failures and
+35 errors. Most were the clone's empty `EMBEDDING_API_KEY` producing correct 401s. One was not
+environmental at all.
+**The defect:** `tests/unit/test_no_network.py::test_network_is_blocked` asserts that
+`socket.create_connection` raises `AssertionError("must not open sockets")`. That guarantee comes
+from the autouse `_no_network` fixture in `conftest.py`, which **returns early when
+`RUN_LIVE=1`** — it is the mechanism that lets live tests reach the provider. Under `RUN_LIVE=1`
+the guard is deliberately off, so the test's premise is void and it fails with `DID NOT RAISE`.
+**Decision:** `skipif` it on `RUN_LIVE=1`, naming the reason.
+**Why this is not weakening a test.** The test guards the guard. Under `RUN_LIVE=1` there is no
+guard to guard, so the assertion is not being made easier — it is being reported as not
+applicable, which is what every live test in the suite already does with the same `skipif`
+pattern. The guard itself is still verified on every ordinary run, which is every run of
+`make check`.
+**Consequence:** the effect is on the *documentation*, not only the test. The fix exposed that
+both `AGENTS.md` and `README.md` recommended `RUN_LIVE=1 uv run pytest` over the whole suite —
+a command that, before this change, **could never be green**, because this one test was
+guaranteed to fail in it. Both now say `RUN_LIVE=1 uv run pytest tests/api`, which is the
+7 live HTTP tests that `make live` misses, verified passing (80 passed).
+
+**How it was found.** Only by following the repository's own documented instructions in a fresh
+clone. Every gate in the working tree was green; the instruction was wrong. That is the D31 shape
+one level up again, and it is the third time the verification step rather than the reading has
+been what found the defect (D79, D81, and D78's original).

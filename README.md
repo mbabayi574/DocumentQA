@@ -1,6 +1,6 @@
 # Document Based Question Answering System (LLM-free extractive QA)
 
-> **Status:** P0–P11 complete and green — 604 offline tests, 113 live against real BGE-M3.
+> **Status:** P0–P11 complete and green — 606 offline tests pass, 113 live against real BGE-M3.
 > This file is the reviewer's entry point. Implementation detail lives in [`plan.md`](plan.md);
 > the evidence log in [`docs/DECISIONS.md`](docs/DECISIONS.md) (D1–D77); the measurements in
 > [`docs/eval_report.md`](docs/eval_report.md).
@@ -509,7 +509,7 @@ from the test suite, which uses the fake provider throughout.
 
 | command | what it does |
 |---|---|
-| `make check` | the offline gate: lint, format, `mypy --strict`, 604 tests |
+| `make check` | the offline gate: lint, format, `mypy --strict`, 606 tests |
 | `make live` | 113 tests against **real** BGE-M3. Not optional — see below |
 | `make check-live` | both, which is the full definition of done |
 | `make invariants` | the 23 tests that witness I1–I10, in 1.5 s |
@@ -534,7 +534,7 @@ uv run pytest -k "invariant or persian" -q
 Network is blocked in tests by `socket.connect` monkeypatching — a test that opens a socket
 **fails** rather than skipping, so nothing quietly depends on the network. Live calls need
 `RUN_LIVE=1`, and `make live` runs `tests/integration` only; the 7 live HTTP tests in
-`tests/api/test_api_live.py` need `RUN_LIVE=1 uv run pytest` over the whole suite.
+`tests/api/test_api_live.py` need `RUN_LIVE=1 uv run pytest tests/api`.
 
 **There is no CI.** The Makefile is the gate, and it only runs when someone runs it.
 

@@ -11,7 +11,7 @@ make check                                       # ruff check + ruff format --ch
 make live                                        # RUN_LIVE=1 pytest tests/integration — real BGE-M3
 make check-live                                  # the full definition of done: check, then live
 uv run pytest tests/unit/test_gate.py::test_x -q # one test; add -k "name" to filter
-RUN_LIVE=1 uv run pytest                         # 120 live tests — see the trap below
+RUN_LIVE=1 uv run pytest tests/api              # the 7 live HTTP tests — see the trap below
 uv run pytest --cov=src/qasystem                 # coverage is measured, NOT gated by make check
 make run                                         # uvicorn, --workers 1 is mandatory
 make eval / make calibrate                       # own index under data/eval; never touches data/
@@ -19,8 +19,8 @@ scripts/smoke_test.sh                            # needs `make run` already serv
 ```
 
 **`make live` is not the whole live suite.** It runs `pytest tests/integration` only, so the
-7 tests in `tests/api/test_api_live.py` never run under it. Use `RUN_LIVE=1 uv run pytest`
-when you touch the HTTP layer. Offline suite is 640 collected (598 pass / 42 skip).
+7 tests in `tests/api/test_api_live.py` never run under it. Use `RUN_LIVE=1 uv run pytest
+tests/api` when you touch the HTTP layer. Offline suite is 648 collected (606 pass / 42 skip).
 
 ## Rules
 
