@@ -24,8 +24,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from qasystem.domain.models import Chunk
-from qasystem.embeddings.caching import input_hash
+from qasystem.domain.models import Chunk, input_hash
 from qasystem.text.tokenize import tokenize
 
 SCHEMA_VERSION = 1

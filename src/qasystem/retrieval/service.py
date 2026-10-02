@@ -33,13 +33,12 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from qasystem.answering.extractive import Answer, build_answer, refuse
 from qasystem.answering.sentences import query_terms, token_coverage
 from qasystem.config import Settings
-from qasystem.domain.models import VectorHit
+from qasystem.domain.models import Candidate, VectorHit
 from qasystem.domain.ports import Embedder, VectorStore
 from qasystem.errors import InvalidQuestionError
 from qasystem.retrieval.fusion import fuse
@@ -49,38 +48,6 @@ from qasystem.storage.sqlite_store import SqliteStore
 from qasystem.text.language import detect_language
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class Candidate:
-    """An eligible chunk plus every score the gate and the answerer need.
-
-    The raw scores sit next to the fused one on purpose. The fused score is only a
-    ranking, and a debugging session that cannot see *why* something ranked first is a
-    debugging session that guesses.
-    """
-
-    chunk_id: str
-    doc_id: str
-    doc_version: int
-    ordinal: int
-    source_name: str
-    text: str
-    section_path: tuple[str, ...]
-    char_start: int
-    char_end: int
-    page_start: int | None
-    page_end: int | None
-    line_start: int | None
-    line_end: int | None
-    language: str
-    score: float
-    dense_rank: int | None
-    lexical_rank: int | None
-    similarity: float | None
-    bm25: float | None
-    lexical_score: float | None
-    token_coverage: float
 
 
 class RetrievalService:

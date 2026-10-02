@@ -22,13 +22,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from qasystem.answering.sentences import chunk_idf, query_terms, select_sentences
 from qasystem.chunking.chunker import Sentence, split_sentences
-
-if TYPE_CHECKING:  # pragma: no cover - the service imports this module, so types only
-    from qasystem.retrieval.service import Candidate
+from qasystem.domain.models import Candidate
 
 AnswerStatus = Literal["answered", "insufficient_information"]
 

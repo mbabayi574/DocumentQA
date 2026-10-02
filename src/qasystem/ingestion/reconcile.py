@@ -18,8 +18,13 @@ from typing import Any
 
 from qasystem.domain.models import VectorItem
 from qasystem.domain.ports import Embedder, VectorStore
-from qasystem.storage.chroma_store import PAGE_SIZE
 from qasystem.storage.sqlite_store import SqliteStore
+
+#: How many chunks ``rebuild`` restores per batch. Deliberately its own constant rather than
+#: Chroma's ``PAGE_SIZE``: that one is what the vector store's ``get(limit=, offset=)`` accepts
+#: (D29), and reusing it here made this service import a concrete adapter for one integer. The
+#: two values happen to agree today; they are answers to different questions (D76).
+REBUILD_BATCH = 500
 
 
 @dataclass(frozen=True)
@@ -62,7 +67,7 @@ def rebuild(
     """
     vectors.ensure_collection()
     restored = 0
-    for batch in _batched(store.chunks_need_vectors(), PAGE_SIZE):
+    for batch in _batched(store.chunks_need_vectors(), REBUILD_BATCH):
         cached = store.get_embeddings(model_id, [row["embed_input_hash"] for row in batch])
         items = [
             VectorItem(

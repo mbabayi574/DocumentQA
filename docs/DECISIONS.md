@@ -2150,3 +2150,55 @@ The `EmbeddingCache` port **stays**. After this change it has the store plus the
 fakes in `test_embed_caching.py` — two real implementations, which is what §10 rule 16 asks
 for. The fake is not decoration: `test_a_cache_repository_failure_does_not_lose_the_vectors`
 needs a cache that raises, and no real store will.
+
+## D76 — three layer violations fixed, and the purity test extended past `domain/` (P11)
+
+**Context:** P0's `test_domain_purity.py` checked one thing: `domain/` imports no framework or
+I/O library. `plan.md` §9 P11 asks for layer boundaries to be "verified by extending the AST
+purity test past `domain/`". Reading the actual import graph found three real violations, none
+of which that test could see:
+
+| violation | why it matters |
+|---|---|
+| `storage.sqlite_store` → `embeddings.caching` for `input_hash` | a repository is a leaf adapter; it was importing a higher layer for `hashlib.sha256(...)` |
+| `ingestion.reconcile` → `storage.chroma_store` for `PAGE_SIZE` | a service took the `VectorStore` **port** but imported the concrete **adapter** for one integer |
+| `answering.extractive` ⇄ `retrieval.service` | an import cycle, invisible to mypy because `Candidate` was imported under `TYPE_CHECKING` |
+
+**Decision:** `input_hash` and `Candidate` both moved to `domain/models.py`; `reconcile` got its
+own `REBUILD_BATCH`; and the AST test gained five layer rules plus a cycle detector.
+**Evidence:** each rule is now enforced, and each was verified to still bite — re-adding
+`from qasystem.embeddings.fake import FakeEmbedder` to `sqlite_store.py` fails the `storage`
+rule, and re-adding `from qasystem.retrieval.service import Candidate` to `extractive.py` fails
+both the `answering` rule and the cycle detector. A guard nobody has watched fail is D25's
+failure mode with a green tick on it.
+
+### Why `input_hash` moved rather than being inlined at the second call site
+
+The obvious alternative was to write `hashlib.sha256(embed_input.encode("utf-8")).hexdigest()`
+inline in `sqlite_store.py` and leave the function in `embeddings/`. That removes the inverted
+import and costs one line. It was rejected because the two values are not redundant: the store
+*writes* `chunks.embed_input_hash` and `caching` *reads it back* as the cache key. Two copies of
+the expression agree until someone changes one — and then I5 (an unchanged chunk costs zero
+requests) and I10 (a rebuilt index finds its vectors) both fail **silently**, as a slow path
+rather than an error. One definition, reachable from both sides, is the smaller correct shape.
+
+### Why `reconcile` got a duplicate constant
+
+`REBUILD_BATCH = 500` and `PAGE_SIZE = 500` now hold the same number, which looks like exactly
+the kind of duplication this entry criticises two paragraphs above. The distinction is that they
+answer different questions: `PAGE_SIZE` is what Chroma's `get(limit=, offset=)` accepts, pinned
+by the D29 probe, and changing it would break paging against the pinned client;
+`REBUILD_BATCH` is how many rows this loop restores at a time, and changing it changes nothing
+outside this function. One shared constant would couple a service's batch loop to a third-party
+library's pagination contract. Two named constants that agree today is cheaper than that
+coupling.
+
+### The cycle detector was wrong first
+
+The first version built its edges from **package** names while keying the graph by **module**
+path, so every edge pointed at a node that did not exist, the walk terminated immediately, and
+the test passed on a graph that contained the cycle it existed to catch. It was green and
+proving nothing — D25's failure mode wearing a test's clothes, which is why the fix and the
+reason are both recorded rather than just the green result. `refactor-plan.md` predicted this
+test would be written red against today's code; it was, three times, and the third failure was
+the cycle detector after its edges were corrected.

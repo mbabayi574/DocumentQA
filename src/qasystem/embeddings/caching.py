@@ -12,19 +12,14 @@ each other's vectors, even at the same dimension.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Iterable, Sequence
 from typing import Protocol
 
+from qasystem.domain.models import input_hash
 from qasystem.domain.ports import Embedder
 
 logger = logging.getLogger(__name__)
-
-
-def input_hash(text: str) -> str:
-    """sha256 of the exact embedded string; the cache key, with no normalization."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class EmbeddingCache(Protocol):
