@@ -500,6 +500,13 @@ make run                  # uvicorn --factory --workers 1
 startup; a second instance on the same `data/` refuses to start rather than interleaving writes
 (I7/L2, verified with real subprocesses).
 
+**`make run` needs the real provider.** With `EMBEDDING_PROVIDER=fake` the app refuses to start,
+and that is the invariant working rather than a fault: the shipped `config/thresholds.json` is
+calibrated for `Bge-m3`, and I9 will not reuse one model's measurements for another — the fake
+embedder reports `model_id="fake-embedder"`. To try the system without a token, either point
+`THRESHOLDS_PATH` at a thresholds file calibrated for `fake-embedder`, or drive the HTTP surface
+from the test suite, which uses the fake provider throughout.
+
 | command | what it does |
 |---|---|
 | `make check` | the offline gate: lint, format, `mypy --strict`, 604 tests |
