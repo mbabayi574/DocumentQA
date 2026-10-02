@@ -89,6 +89,22 @@ def test_the_only_ignored_fixture_is_the_one_the_plan_excludes() -> None:
     )
 
 
+@needs_git
+def test_no_runtime_artifact_is_tracked() -> None:
+    """A tracked lock file is a runtime artifact that means nothing in a clean clone.
+
+    ``.qasystem.lock`` is L2's single-instance lock: it is created by running the app and
+    means nothing until then. Tracked, it invites a reader to reason about ownership of
+    ``data/`` from a 0-byte file that every clone inherits.
+    """
+    tracked = set(_git("ls-files"))
+    offenders = sorted(name for name in tracked if name.endswith(".lock") and name != "uv.lock")
+    assert not offenders, (
+        f"runtime lock files are tracked: {offenders}. `uv.lock` is the dependency lockfile "
+        "and is the only one that belongs in source control."
+    )
+
+
 def test_every_required_fixture_is_present() -> None:
     """Named explicitly, so a renamed or deleted fixture fails here rather than six
     files away. This is the check that would have caught the D31 regression directly."""

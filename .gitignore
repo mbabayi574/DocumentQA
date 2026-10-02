@@ -14,6 +14,11 @@ wheels/
 # Runtime data: SQLite db, local Chroma dir, single-instance lock
 /data/
 
+# The L2 lock, when DATA_DIR is the repo root rather than data/. It is created by running
+# the app and means nothing until then -- tracked, every clone inherits a 0-byte file that
+# looks like it says something about ownership. Guarded by test_repo_consistency.py.
+/.qasystem.lock
+
 # Tool caches
 .pytest_cache/
 .ruff_cache/
