@@ -761,17 +761,32 @@ components are important to us." This phase makes the work easy to review.
 
 ## 11. Definition of Done
 
-- [ ] PDF, TXT, Markdown ingestion works; English fixtures, Persian per A1
-- [ ] Add / update / delete via API; identical re-upload → zero embedding requests
-- [ ] Local edits re-embed only changed chunks; reorder-only edits re-embed nothing
-- [ ] Deleted and superseded content provably unretrievable (I1–I3), cleanup fault-injected
-- [ ] Failed updates never expose a partial version (I3)
-- [ ] Chroma local and persistent; restart persistence verified; single-instance lock
+- [x] PDF, TXT, Markdown ingestion works; English fixtures, Persian per A1
+      (`test_every_pdf_fixture_parses_with_non_empty_sections`, parametrized over every PDF in
+      `tests/fixtures/docs/`, so a new fixture is covered automatically; `test_persian_markdown_and_zwnj_survive`)
+- [x] Add / update / delete via API; identical re-upload → zero embedding requests
+      (`test_post_a_document_creates_it`, `test_put_replaces_an_active_document`,
+      `test_delete_returns_204_and_makes_it_unqueryable`, and I4's
+      `test_2_identical_reupload_is_unchanged_and_costs_zero_embed_calls`)
+- [x] Local edits re-embed only changed chunks; reorder-only edits re-embed nothing
+      (I5: `test_3_a_local_edit_embeds_only_the_changed_chunk`;
+      `test_a_reorder_only_edit_reuses_everything`)
+- [x] Deleted and superseded content provably unretrievable (I1–I3), cleanup fault-injected
+      (`make invariants` — I1's 3 witnesses, I2's fault-injected delete, I3's 4)
+- [x] Failed updates never expose a partial version (I3)
+      (`test_7_embedder_failure_mid_update_leaves_the_old_version_queryable`,
+      `test_8_chroma_failure_during_staging_aborts_the_publish`)
+- [x] Chroma local and persistent; restart persistence verified; single-instance lock
       enforced; `rebuild` restores dense search with zero API calls (I10)
+      (`test_vectors_survive_a_restart`, `test_a_rebuilt_index_survives_a_restart`,
+      `test_a_second_process_is_refused`, I10's `test_10_rebuild_...`)
 - [x] Hybrid retrieval measured against dense-only and lexical-only baselines
-- [ ] Answers are exact source excerpts; every citation mechanically verified (I6, I7)
+- [x] Answers are exact source excerpts; every citation mechanically verified (I6, I7)
+      (I6 and I7's 3 witnesses under `make invariants`, plus the M2/M13 mutation tables)
 - [x] Unanswerable questions → `insufficient_information`, no citations
-- [ ] No GUI dependency; stable OpenAPI; structured errors; no secrets exposed (I8)
+- [x] No GUI dependency; stable OpenAPI; structured errors; no secrets exposed (I8)
+      (`test_the_schema_is_stable_across_runs`, `test_the_error_envelope_is_declared_in_the_schema`,
+      `test_every_error_code_the_app_can_return_is_named_in_the_schema`, I8's 5 witnesses)
 - [x] `make check` clean **and a fresh `git clone` green**
 - [x] `docs/eval_report.md`, `config/thresholds.json`, `docs/DECISIONS.md` committed;
       README quotes the measured numbers and states the limits
