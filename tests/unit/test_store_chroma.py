@@ -57,6 +57,7 @@ def test_a_collection_name_is_always_a_legal_chroma_identifier() -> None:
     assert re.fullmatch(r"[a-z0-9_-]{3,63}", name), name
 
 
+@pytest.mark.invariant  # I9
 def test_a_different_dimension_gets_a_different_collection(tmp_path: Any) -> None:
     """The dimension is in the collection name, so 1024-d and 1536-d never meet."""
     small = ChromaStore(tmp_path / "chroma", model_id=MODEL, dimension=DIM)
@@ -77,6 +78,7 @@ def test_a_different_model_gets_a_different_collection(tmp_path: Any) -> None:
     assert bge.collection_name != other.collection_name
 
 
+@pytest.mark.invariant  # I9
 def test_a_name_collision_is_refused_rather_than_mixed(tmp_path: Any) -> None:
     """I9's real hole: two long model ids whose slugs truncate to one name.
 

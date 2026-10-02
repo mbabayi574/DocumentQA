@@ -391,6 +391,7 @@ async def test_every_request_carries_the_bearer_token(settings_factory: Any) -> 
 
 
 @respx.mock
+@pytest.mark.invariant  # I8
 async def test_the_token_never_appears_in_an_error_body(settings_factory: Any) -> None:
     respx.post(f"{BASE}/embeddings").mock(
         return_value=httpx.Response(500, text=f"key {SECRET} leaked")

@@ -113,6 +113,7 @@ def test_rollback_leaves_the_previous_published_version_untouched(store: SqliteS
     assert store.version_state("d", 1) == "published"
 
 
+@pytest.mark.invariant  # I3
 def test_a_rolled_back_staging_can_be_retried(store: SqliteStore) -> None:
     version = store.begin_staging("d", "D", "d.md", "md", "c1", "p1", "en")
     with pytest.raises(RuntimeError):
@@ -176,17 +177,20 @@ def test_an_unknown_document_is_none_not_an_error(store: SqliteStore) -> None:
 # ---------------------------------------------------------------- I1 / I2
 
 
+@pytest.mark.invariant  # I1
 def test_a_staging_chunk_is_not_eligible(store: SqliteStore) -> None:
     version = store.begin_staging("d", "D", "d.md", "md", "c1", "p1", "en")
     store.stage_version("d", version, "c1", "body", [make_chunk(0)], ["body"])
     assert store.eligible_chunk_ids() == []
 
 
+@pytest.mark.invariant  # I1
 def test_a_published_chunk_is_eligible(store: SqliteStore) -> None:
     published(store, "d")
     assert store.eligible_chunk_ids() == ["d:v1:0"]
 
 
+@pytest.mark.invariant  # I1
 def test_a_superseded_chunk_is_not_eligible(store: SqliteStore) -> None:
     """The I1/I2 core: publishing v2 must make v1 unreachable, rows and all."""
     published(store, "d", text="v1 body", version=1)

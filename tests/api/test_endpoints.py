@@ -574,6 +574,7 @@ def test_a_request_id_is_returned_and_honoured(client: Any) -> None:
     assert echoed.headers["x-request-id"] == "caller-supplied-id"
 
 
+@pytest.mark.invariant  # I8
 def test_no_endpoint_echoes_a_secret(client: Any, services: Any, settings_factory: Any) -> None:
     """I8 on the HTTP surface: every response body and header is checked."""
     secret = "sk-live-should-never-appear-anywhere-0123456789"

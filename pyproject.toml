@@ -55,6 +55,9 @@ mypy_path = "src"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
+markers = [
+    "invariant: witnesses one of I1-I10 (plan.md §5.1). These are the release blockers; run them with `make invariants`.",
+]
 
 [tool.coverage.run]
 source = ["src/qasystem"]

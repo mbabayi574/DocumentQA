@@ -41,6 +41,7 @@ def inner() -> FakeEmbedder:
     return FakeEmbedder(dimension=8)
 
 
+@pytest.mark.invariant  # I5
 async def test_a_miss_embeds_and_writes_back(inner: FakeEmbedder) -> None:
     cache = CountingCache()
     embedder = CachingEmbedder(inner, cache)

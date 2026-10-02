@@ -2202,3 +2202,47 @@ proving nothing — D25's failure mode wearing a test's clothes, which is why th
 reason are both recorded rather than just the green result. `refactor-plan.md` predicted this
 test would be written red against today's code; it was, three times, and the third failure was
 the cycle detector after its edges were corrected.
+
+## D77 — I1–I10 are grouped behind `pytest -m invariant`, 23 named witnesses (P11)
+
+**Context:** `plan.md` §9 P11 asks for the invariant tests to be "grouped and runnable as
+`pytest -m invariant`, so I1–I10 are verifiable without reading the suite". Before this, the
+markers did not exist: `pyproject.toml` declared none and ran with `--strict-markers`, so the
+command `plan.md` names would have failed outright.
+**Decision:** an `invariant` marker, declared in `pyproject.toml`, applied to 23 named tests,
+and a `make invariants` target. Each marker carries its invariant as a comment
+(`@pytest.mark.invariant  # I1`) so the mapping is readable at the test, not only in a table
+somewhere.
+
+| | invariant | witnesses | where |
+|---|---|---|---|
+| I1 | active version only | 3 | `test_store_sqlite.py` |
+| I2 | deletion, cleanup fault-injected | 1 | `test_ingestion.py` |
+| I3 | atomic publication | 4 | `test_ingestion.py`, `test_store_sqlite.py` |
+| I4 | idempotency | 2 | `test_ingestion.py` |
+| I5 | unchanged chunks cost zero requests | 2 | `test_ingestion.py`, `test_embed_caching.py` |
+| I6 | traceability | 1 | `test_retrieval.py` |
+| I7 | no synthesis | 2 | `test_retrieval.py` |
+| I8 | secrets | 5 | `test_config.py`, `test_embed_client.py`, `test_endpoints.py` |
+| I9 | model isolation | 2 | `test_store_chroma.py` |
+| I10 | disposable index | 1 | `test_ingestion.py` |
+
+`make invariants` prints **23 passed, 623 deselected**. The number is recorded because a
+grouping whose size nobody can check is a grouping in name only.
+
+### The grouping was mutation-checked, because a marker is only a label
+
+Loosening I1's choke point — changing `eligible_chunks` from `d.current_version =
+c.doc_version` to `>=`, so a superseded version's chunks become eligible again — fails exactly
+one test, `test_a_superseded_chunk_is_not_eligible`, which is tagged `# I1`. Restoring the
+predicate returns the run to 23 passed. A marker added without that step would have been
+indistinguishable from a comment.
+
+### What this does not claim
+
+One witness per invariant is the floor, not the proof. D26's gap stands: `mark_deleted` also
+nulls `current_version`, so the view's `status = 'active'` guard can be deleted and I1's tests
+still pass, because the null makes the version check fail on its own. Fixing that needs a test
+against the state the guard alone defends — a `deleted` document whose `current_version` is
+still set — which is P10's "a regression test for every bug found along the way" work rather
+than something this grouping claims to have closed.

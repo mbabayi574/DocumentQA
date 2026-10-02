@@ -192,6 +192,7 @@ async def test_1_add_then_query_finds_the_content(env: Any) -> None:
 # ---------------------------------------------------------------- test 2 (I4)
 
 
+@pytest.mark.invariant  # I4
 async def test_2_identical_reupload_is_unchanged_and_costs_zero_embed_calls(env: Any) -> None:
     await env.service.ingest(DOC_V1.encode(), "handbook.md")
     env.fake.reset()
@@ -204,6 +205,7 @@ async def test_2_identical_reupload_is_unchanged_and_costs_zero_embed_calls(env:
     assert len(env.store.versions("handbook")) == 1  # no new version
 
 
+@pytest.mark.invariant  # I4
 async def test_2b_different_bytes_with_identical_parsed_text_are_also_unchanged(env: Any) -> None:
     """I4 says *parsed text*, not raw bytes: a CRLF re-upload is not a new version."""
     await env.service.ingest(DOC_V1.encode(), "handbook.md")
@@ -220,6 +222,7 @@ async def test_2b_different_bytes_with_identical_parsed_text_are_also_unchanged(
 # ---------------------------------------------------------------- test 3
 
 
+@pytest.mark.invariant  # I5
 async def test_3_a_local_edit_embeds_only_the_changed_chunk(env: Any) -> None:
     first = await env.service.ingest(DOC_V1.encode(), "handbook.md")
     env.fake.reset()
@@ -259,6 +262,7 @@ async def test_4_after_publish_the_old_text_is_unretrievable(env: Any) -> None:
 # ---------------------------------------------------------------- test 5 (I2)
 
 
+@pytest.mark.invariant  # I2
 async def test_5_delete_is_unretrievable_even_when_chroma_cleanup_fails(env: Any) -> None:
     await env.service.ingest(DOC_V1.encode(), "handbook.md")
     await env.service.ingest(DOC_V2_EXTRA.encode(), "handbook.md")
@@ -314,6 +318,7 @@ async def test_6_re_add_creates_a_new_version_and_old_ids_never_return(env: Any)
 # ---------------------------------------------------------------- test 7 (I3)
 
 
+@pytest.mark.invariant  # I3
 async def test_7_embedder_failure_mid_update_leaves_the_old_version_queryable(env: Any) -> None:
     await env.service.ingest(DOC_V1.encode(), "handbook.md")
     before_lexical = env.lexical_ids("installer")
@@ -336,6 +341,7 @@ async def test_7_embedder_failure_mid_update_leaves_the_old_version_queryable(en
     assert env.store.get_document("handbook")["current_version"] == 1
 
 
+@pytest.mark.invariant  # I3
 async def test_7b_a_failed_version_is_marked_and_leaves_no_rows(env: Any) -> None:
     await env.service.ingest(DOC_V1.encode(), "handbook.md")
     exploding = ExplodingEmbedder(FakeEmbedder(dimension=DIM), on_call=1)
@@ -361,6 +367,7 @@ async def test_7b_a_failed_version_is_marked_and_leaves_no_rows(env: Any) -> Non
 # ---------------------------------------------------------------- test 8 (I3)
 
 
+@pytest.mark.invariant  # I3
 async def test_8_chroma_failure_during_staging_aborts_the_publish(env: Any) -> None:
     await env.service.ingest(DOC_V1.encode(), "handbook.md")
     before_eligible, before_lexical = env.eligible(), env.lexical_ids("installer")
@@ -463,6 +470,7 @@ async def test_9c_reconcile_never_derives_sqlite_state_from_chroma(env: Any) -> 
 # ---------------------------------------------------------------- test 10 (I10)
 
 
+@pytest.mark.invariant  # I10
 async def test_10_rebuild_restores_dense_search_with_zero_embed_calls(env: Any) -> None:
     from qasystem.ingestion.reconcile import rebuild
 

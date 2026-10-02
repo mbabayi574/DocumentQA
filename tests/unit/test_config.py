@@ -28,6 +28,7 @@ def test_missing_model_id_is_a_controlled_config_error(settings_factory) -> None
         settings_factory(**{**REMOTE, "embedding_model": None})
 
 
+@pytest.mark.invariant  # I8
 def test_secret_never_appears_in_repr_or_serialisation(settings_factory) -> None:
     settings = settings_factory(**REMOTE)
     assert SECRET not in repr(settings)
@@ -38,6 +39,7 @@ def test_secret_never_appears_in_repr_or_serialisation(settings_factory) -> None
     assert settings.embedding_api_key.get_secret_value() == SECRET
 
 
+@pytest.mark.invariant  # I8
 def test_secret_is_redacted_in_logs(tmp_path: Path, settings_factory) -> None:
     settings = settings_factory(**REMOTE)
     log_file = tmp_path / "app.log"
@@ -51,6 +53,7 @@ def test_secret_is_redacted_in_logs(tmp_path: Path, settings_factory) -> None:
     assert logged.count(REDACTED) == 2
 
 
+@pytest.mark.invariant  # I8
 def test_redaction_preserves_non_string_args(tmp_path: Path, settings_factory) -> None:
     """httpx logs '... "%s %d %s"' with an int status code; str() would break it."""
     log_file = tmp_path / "app.log"

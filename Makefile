@@ -7,7 +7,7 @@ UV := uv run
 EVAL_DATA := $(CURDIR)/data/eval
 EVAL_ENV := DATA_DIR=$(EVAL_DATA) SQLITE_PATH=$(EVAL_DATA)/qasystem.db CHROMA_PATH=$(EVAL_DATA)/chroma
 
-.PHONY: check check-live live eval calibrate test run sync
+.PHONY: check check-live live eval calibrate test run sync invariants
 
 sync: ## install dependencies (uv.lock is committed)
 	uv sync
@@ -22,6 +22,9 @@ live: ## the same tests against the REAL provider. Every phase runs this, not ju
 	RUN_LIVE=1 $(UV) pytest tests/integration -q
 
 check-live: check live ## offline gate and live gate: the full definition of done
+
+invariants: ## I1-I10 alone: the release blockers, verifiable without reading the suite
+	$(UV) pytest -m invariant -q
 
 eval: ## score the eval corpus against the real provider and print the metrics (P9 §9.2)
 	RUN_LIVE=1 $(EVAL_ENV) $(UV) python -m qasystem.cli eval

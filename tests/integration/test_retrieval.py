@@ -211,6 +211,7 @@ async def test_1b_the_cited_text_is_verbatim_from_the_source(env: Any) -> None:
 # ---------------------------------------------------------------- plan test 3 (I6, I7)
 
 
+@pytest.mark.invariant  # I6
 async def test_3_every_segment_is_an_exact_substring_of_its_chunk_and_the_source(env: Any) -> None:
     await env.ingest.ingest(HANDBOOK.encode(), "handbook.md")
     await env.ingest.ingest(PERSIAN.encode(), "rahnamа.md")
@@ -229,6 +230,7 @@ async def test_3_every_segment_is_an_exact_substring_of_its_chunk_and_the_source
             assert absolute[offset : offset + len(segment.text)] == segment.text
 
 
+@pytest.mark.invariant  # I7
 async def test_3b_the_rendered_answer_is_exactly_the_slices_plus_their_markers(
     env: Any,
 ) -> None:
@@ -259,6 +261,7 @@ async def test_3b_the_rendered_answer_is_exactly_the_slices_plus_their_markers(
         assert segment.text in env.source("notes")
 
 
+@pytest.mark.invariant  # I7
 async def test_3c_segments_are_ordered_by_source_position(env: Any) -> None:
     document = (
         "# Doc\n\n## One\n\n"
