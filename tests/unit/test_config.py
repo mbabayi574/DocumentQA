@@ -8,12 +8,72 @@ from pathlib import Path
 
 import pytest
 
-from qasystem.config import load_settings
+from qasystem.config import Settings, load_settings
 from qasystem.errors import ConfigError
 from qasystem.logging_setup import REDACTED, configure_logging
 
+ROOT = Path(__file__).resolve().parents[2]
 SECRET = "sk-super-secret-token-value"
 REMOTE = {"embedding_provider": "remote", "embedding_api_key": SECRET, "embedding_model": "bge-m3"}
+
+
+def test_the_env_example_is_a_valid_config_once_copied() -> None:
+    """`cp .env.example .env` is step two of the documented setup. It must not break.
+
+    D31 again, one layer up. A green working tree hid this: the developer's own `.env` carries a
+    real `EMBEDDING_DIMENSION=1024`, so the suite passed, while every fresh clone that followed
+    the README failed six tests with ``embedding_dimension: Input should be a valid integer,
+    unable to parse string as an integer``. The cause was ``EMBEDDING_DIMENSION=`` sitting in
+    `.env.example` as an *empty* value: an empty string is a string, and ``int | None`` rejects
+    it rather than reading it as unset. Only §0.11's clean-clone check could see it.
+
+    ``extra="ignore"`` means a key the Settings class does not declare would pass silently, so
+    this also checks that every key in the example is one the config actually reads.
+    """
+    example = ROOT / ".env.example"
+    values: dict[str, str] = {}
+    for line in example.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.split("#", 1)[0].strip()
+
+    # `.env.example` spells them as ENV VARS; `Settings.model_fields` keys are lowercase field
+    # names. `pydantic-settings` matches them case-insensitively, so this comparison must too.
+    unknown = sorted(set(values) - {name.upper() for name in Settings.model_fields})
+    assert not unknown, f".env.example sets keys Settings does not declare: {unknown}"
+
+    # Every non-empty value must survive validation. Empty ones are checked separately below,
+    # because an empty value is exactly how this broke.
+    populated = {k: v for k, v in values.items() if v}
+    settings = load_settings(
+        env_file=None,
+        app_env="test",
+        embedding_provider="fake",
+        embedding_api_key=None,
+        embedding_model=None,
+        **populated,
+    )
+    assert settings.data_dir == Path("./data")
+
+    for key, value in values.items():
+        if value:
+            continue
+        field = Settings.model_fields[key.lower()]
+        # An empty value must mean "unset", not "a string that fails to parse".
+        assert type(None) in _optional_types(field.annotation), (
+            f".env.example ships {key}= as an empty value, but its type is "
+            f'{field.annotation!r}, which cannot read "" as unset. Comment the line out '
+            "instead, or the copy of this file fails to load."
+        )
+
+
+def _optional_types(annotation: object) -> tuple[object, ...]:
+    """The union members of an annotation, or the annotation itself if it is not a union."""
+    if isinstance(annotation, str):  # `from __future__ import annotations` defers evaluation
+        return ()
+    return getattr(annotation, "__args__", (annotation,))
 
 
 def test_missing_api_key_is_a_controlled_config_error(settings_factory) -> None:

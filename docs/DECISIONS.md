@@ -2359,3 +2359,37 @@ a stale path in a docstring, and the same fix: put it where the thing it describ
 | one-line module docstring stating role and layer | 42/42 modules have one; none is missing |
 | `plan.md` §7's layout matches `git ls-files` | one line was wrong: `scripts/eval.sh`, which never existed. Removed, and `build_eval_corpus.py` added, since it exists and §7 did not list it |
 | `sqlite_store.py`'s docstring vs `execute_script` | the docstring claimed "a caller cannot reach a cursor" while `execute_script` hands one out. Now names the exception, says what it is for (migrations, and tests that must inject a state the API refuses to build), and says which boundary it weakens |
+
+## D79 — `.env.example` shipped an empty `EMBEDDING_DIMENSION`, and every clean clone was red (P11)
+
+**Context:** §0.11 requires a fresh `git clone` to pass, and `plan.md` §9 P11 repeats it as the
+last item of the phase. P11 ran it. **The clone failed six tests.** The working tree was green,
+which is the exact shape of D31 — a defect a green tree cannot see.
+**Evidence:** `embedding_dimension: Input should be a valid integer, unable to parse string as an
+integer`, raised from `get_settings()` → `load_settings()` while reading `.env`. The developer's
+own `.env` carries a real `EMBEDDING_DIMENSION=1024`, so the suite passed locally and failed for
+anyone who followed the README.
+
+**Cause:** `.env.example` shipped the line as `EMBEDDING_DIMENSION=` with a trailing comment.
+An empty value in a `.env` file is the **empty string**, not "unset", and `embedding_dimension`
+is `int | None` — so pydantic tries to parse `""` as an integer and refuses. `EMBEDDING_MODEL=`
+and `EMBEDDING_API_KEY=` are also empty in that file and are perfectly fine, because their types
+are `str | None` and `SecretStr | None`, and an empty string is a valid `str`. The one field whose
+empty value is not a valid instance of its own type is the one that broke.
+
+**Decision:** comment the line out, so it is genuinely unset rather than an empty string, and say
+why in the file. The guard is a new test: `test_the_env_example_is_a_valid_config_once_copied`.
+**What the test checks.** Every key in `.env.example` must be one `Settings` declares —
+`extra="ignore"` means an unknown key would otherwise fail silently and rot. Every **non-empty**
+value must survive validation. And every **empty** value must belong to a field whose type
+accepts "unset", which is the precise rule this broke. Written first, and it failed; then
+re-broken by hand (the empty line re-added) and watched to fail again.
+
+### Why this is worth a test and not just a fix
+
+The fix is one character. The test is the part that matters, because the two ways this can
+recur are both silent: someone adds a new optional numeric field to `.env.example` with an empty
+value, or someone renames a field and leaves the example behind. Neither shows up in a working
+tree whose `.env` is populated. This is the third instance of D31's shape — a fixture, then a
+path in a docstring, now a setup file — and each one needed a different guard because each was
+invisible to the previous two.
