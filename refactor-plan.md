@@ -284,18 +284,48 @@ Recorded so this audit is not repeated, and so nobody "fixes" a deliberate choic
 
 ---
 
-## 5. Gate checklist for P11
+## 5. Gate checklist for P11 — closed
 
-- [ ] R1–R9 landed as separate commits, each with `make check` **and** `make live` green
-- [ ] `pytest -m invariant` runs and its count is recorded here
-- [ ] AST purity test extended past `domain/`, written red first
-- [ ] `README.md` covers all twelve §9 items, and says cross-lingual is unsupported
-- [ ] `docs/DECISIONS.md` opens with an index; the chronological log is unchanged
-- [ ] Every relative markdown link in `README.md`, `DECISIONS.md` and `plan.md` resolves
-      (guard test in `test_repo_consistency.py`)
-- [ ] No `*.lock` tracked outside `uv.lock`
-- [ ] `grep -rn "embed_query\|sentence_rerank\|_int_or_none\|EmbedderRef"` over `src/`
-      returns nothing
-- [ ] `plan.md` §7's layout matches `git ls-files`
-- [ ] Clean clone: `uv sync && cp .env.example .env && make check && make run`, then
-      `make live`
+Every item below was verified; the evidence is in `docs/DECISIONS.md` D73–D80.
+
+- [x] R1–R9 landed as separate commits, each with `make check` green. `make live` was re-run on
+      every commit touching `src/` (R1, R3, R4, R5, R9) and at the phase gate; the docs-only
+      commits (R2, R7, R8) touched no code, and R8 instead verified its API claims by running
+      them against the real provider — a stronger check for that change than the suite.
+- [x] `pytest -m invariant` runs: **23 passed, 623 deselected** (D77), each carrying its
+      invariant as a comment. Mutation-checked by loosening I1's `eligible_chunks` predicate.
+- [x] AST purity test extended past `domain/`, written red first: five layer rules plus a cycle
+      detector, each re-broken on purpose and watched to fail (D76).
+- [x] `README.md` covers all twelve §9 items, and says cross-lingual is unsupported (D78 era;
+      §3 and §11).
+- [x] `docs/DECISIONS.md` opens with an index; the chronological log is unchanged. Every
+      D-number the index cites was checked to resolve to a real entry.
+- [x] Every relative markdown link in `README.md`, `DECISIONS.md` and `plan.md` resolves
+      (D74). The guard then failed on D74's own prose and was fixed rather than loosened.
+- [x] No `*.lock` tracked outside `uv.lock`, guarded (D-noted in R2).
+- [x] `grep -rn "embed_query\|sentence_rerank\|_int_or_none\|EmbedderRef"` over `src/` returns
+      nothing.
+- [x] `plan.md` §7's layout matches `git ls-files`: `scripts/eval.sh` removed,
+      `build_eval_corpus.py` added (D78).
+- [x] Clean clone verified: `uv sync && cp .env.example .env && make check` → 603 passed /
+      43 skipped, `make invariants` → 23 passed, `make run` → `/health` 200 and `/ready` ready
+      against real BGE-M3, a second instance refused by L2, `/docs` and `/redoc` 200.
+
+## 6. Deviations from this plan, and one thing it missed
+
+- **`.env.example` shipped an empty `EMBEDDING_DIMENSION`**, so every clean clone failed six
+  tests while the working tree was green. Not in the audit: it is a *runtime* defect in a setup
+  file, invisible to any static reading of `src/`. Only §0.11's clone check found it (D79).
+- **12 of 13 error codes appeared nowhere in the OpenAPI schema** (D78). The plan's R9 listed
+  this as a check; it turned out to be the single most valuable item in the pass.
+- **`plan.md` R4 predicted the cache rename was a three-line change.** It nearly was not: the
+  port took a `Mapping` and the store takes an iterable of pairs, and iterating a `Mapping`
+  yields keys. The adapter's `rows.items()` was load-bearing (D75).
+- **The cycle detector passed on the graph containing the cycle it existed to catch** — edges
+  keyed by module path but filled with package names (D76). Fixed, and the fix is recorded
+  because the failure mode is D25 wearing a green tick.
+- **Not split:** `sqlite_store.py`, as §3 of this plan predicted. Now 640 lines and unchanged in
+  argument.
+- **Left open:** one intermittent live failure, twice in ~40 runs, cause not established (D80).
+  It is recorded rather than repaired, because the repair would have meant loosening an assertion
+  without knowing what the assertion was.
