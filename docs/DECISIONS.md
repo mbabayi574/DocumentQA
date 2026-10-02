@@ -2478,3 +2478,62 @@ guaranteed to fail in it. Both now say `RUN_LIVE=1 uv run pytest tests/api`, whi
 clone. Every gate in the working tree was green; the instruction was wrong. That is the D31 shape
 one level up again, and it is the third time the verification step rather than the reading has
 been what found the defect (D79, D81, and D78's original).
+
+## D82 — the intermittent live test is deleted, and what that costs (P11)
+
+**Context:** D80 recorded a live test failing roughly 1 run in 20 with an unknown cause. The
+human's decision was to remove it rather than keep chasing it: `test_the_whole_fixture_corpus_
+serves_both_languages_then_survives_a_delete`, the only test that ingests the full 1225-chunk
+fixture corpus. Deleted, along with the `CORPUS`/`PERSIAN_BOOK` constants and the
+`default_doc_id` import that only it used.
+**Decision:** delete. The flake is therefore resolved by removing the symptom, **not by fixing a
+cause**, and D80's cause remains unknown. Saying otherwise would be exactly the kind of claim
+this log exists to refuse.
+
+### It was not a useless test, and the honest accounting is this
+
+Before deleting it, the coverage was checked against the rest of the suite. Three of its
+assertions were redundant:
+
+| assertion | also covered by |
+|---|---|
+| one collection answers English and Persian | `test_the_app_serves_the_corpus_end_to_end_over_real_http`, `test_the_cross_lingual_miss_is_the_lexical_arm_not_the_dense_bar` |
+| deleting a document makes it unqueryable | I2's fault-injected witness (offline), `test_delete_returns_204_and_makes_it_unqueryable` (API) |
+| a Markdown citation has no page and does have lines | `test_3_every_segment_is_an_exact_substring_of_its_chunk_and_the_source` and the I6/I7 witnesses |
+
+Two were **not** covered anywhere, and that is the real cost:
+
+1. **`MAX_ITEMS_PER_BATCH` has no other witness.** `39 <= requests <= 48` for 1225 chunks was the
+   only place in the repository that verified batching actually batches at real scale. §2 calls
+   32 items/request the measured throughput peak and says "do not optimise this upward"; nothing
+   tests that it was not silently changed, and nothing now tests that batching still holds.
+   The measurement itself is recorded in D71 (43 requests) and remains true as a *measurement* —
+   it is the *regression* that is now unwatched.
+2. **No test ingests a corpus of this size.** The largest remaining ingest is the 49-chunk eval
+   corpus. Batch splitting on the per-item character cap, and behaviour when one document is 84%
+   of an index, are exercised only by that test.
+
+If someone later asks why ingest is slow or why the index is larger than expected, nothing will
+fail. Restoring coverage is cheap — the surviving assertions are deterministic counts, not ranks
+— but that is a decision, not a cleanup, so it is offered rather than taken.
+
+### The other "useless" tests: audited, none removed
+
+The request was to remove "other useless and unneeded tests" too, so the suite was scanned
+rather than guessed at. Every test was parsed and checked for making at least one assertion.
+Four have no `assert` and no `pytest.raises`:
+
+- `test_the_data_lock_is_reusable_after_the_holder_exits` — kills the lock holder, then
+  successfully builds the graph. "Did not raise" *is* the assertion: a lock that outlived its
+  process would make restarting the service impossible (L2).
+- `test_a_different_directory_can_be_owned_at_the_same_time` — two directories, two locks, no
+  conflict. Its sibling `test_a_second_holder_is_refused` proves the lock does refuse, so the
+  pair brackets the behaviour.
+- `test_releasing_a_lock_that_was_never_taken_is_harmless` — idempotent release, which
+  `Services.aclose()` relies on.
+- `test_reopening_the_same_model_and_dimension_is_fine` — `ensure_collection()` twice must not
+  raise, which is the D29 idempotency property.
+
+All four are must-not-raise tests with a sibling that proves the opposite case holds. Removing
+them would delete the only thing asserting their behaviour. Nothing else in the suite is
+redundant, and the two query-LRU tests that genuinely were have already gone in R1 (D73).
