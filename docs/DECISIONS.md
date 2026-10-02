@@ -1,6 +1,76 @@
 # Decisions
 
-Log with evidence. Newest last.
+Log with evidence. Newest last. Entries are never renumbered or rewritten — the order **is**
+the evidence, because most entries exist to correct the one before them.
+
+## Index — the reviewer's entry point
+
+77 entries. Read the index, then the entries it names; the log below it is for the reader who
+wants the whole argument.
+
+### Where each requirement is answered
+
+| `jobTask.md` requirement | Decisions |
+|---|---|
+| Process PDF, TEXT, Markdown | D10, D11, D12, D14, D15, D16, D32 |
+| Add / edit / delete, never use outdated content | D25, D26, D31, D33, D34, D35, D36 |
+| Relevant retrieval | D37, D38, D39, D40, D41, D54, D56, D59, D64 |
+| Evidence-based, traceable answers | D44, D60, D66, D68 |
+| Say so when information is insufficient | D41, D47, D51, D55, D60, D61, D67, D71 |
+| API access, no GUI | D49, D50, D52, D53, D72 |
+| Readability, separation of concerns, tests | D20, D73, D74, D75, D76, D77 |
+
+### 1. Why BGE-M3, and why these retrieval numbers
+
+`README.md`'s model section is the argument; these are the load-bearing entries. D3 (the model
+id is required, never defaulted), D24 (the measurements, re-taken live), D30 (a correction to
+§2.2a), D54 (latency *is* the embedding API), D56 (a test that pinned exact ranks from an
+approximate index), D59 (weights measured at 0.9/0.1, and the lexical arm still earns 0.1),
+D64 (the chunk-size experiment that could not discriminate, so nothing was adopted), **D71
+(cross-lingual retrieval is not supported, and the branch that carried it is gone)**.
+
+### 2. Why these thresholds
+
+`config/thresholds.json` records its own numbers, its own version, and its split. The reasoning:
+D59 (fusion weights), D62 (a "safer" tie-break turned cross-lingual retrieval *off* — the medoid
+is the fix), D67 (`min_lexical` removed; the deletion is provably behaviour-preserving), D71
+(`min_dense_alone` removed), D51 (an uncalibrated placeholder is not another model's
+measurement), D42 (thresholds are keyed by `model_id`, and the two failure modes differ on
+purpose).
+
+### 3. Why this chunk size
+
+D17 (planned on the **densest** measured text, not prose), D18 (sections chunked independently,
+never merged), D19 (a sentence-free page is cut mechanically), D64 (the experiment that *could*
+have changed it and did not, with the measurement that explains why).
+
+### 4. Every deviation from `plan.md`
+
+D1, D2, D8, D11, D14, D15, D20, D24, D27, D28, D29, D30, D31, D36, D38, D39, D40, D41, D42, D47,
+D48, D50, D52, D53, D54, D55, D57, D59, D60, D61, D62, D63, D64, D65, D67, D68, D69, D71, D74.
+Each names the plan section it departs from and why.
+
+### 5. Defects no offline test could find
+
+All four of D45–D48 were found by the first `make live`, while 480 offline tests passed: a Latin
+word glued to Persian script was unmatchable; `embed_requests` counted calls instead of HTTP
+requests (a **32×** error in a number the plan reports); the gate could not authorise the
+system's own headline capability; and the answerer then discarded the evidence the gate had
+accepted. D49 and D50 came next: SQLite connections were thread-bound, so **every endpoint
+500'd**, and `filelock.is_locked` is thread-local, so `/ready` 503'd forever.
+
+### 6. Tests that could have passed for the wrong reason
+
+D25 (`with self._db:` was a no-op under `isolation_level=None`, so nothing ever rolled back),
+D26 (the view's `status = 'active'` guard was untested defence — **still open**, D77 says so),
+D44 (`test_3b` passed for the wrong reason), D53 (a test the harness was silently overriding),
+D56 (exact ranks from an approximate index), D63 (a latency number 30× too small because the
+query cache was warm). D72 is a seventh kind: not a test, but a contract that lied.
+
+### Reading order for a first-time reviewer
+
+1. This index. 2. `README.md`. 3. `plan.md` §0 (protocol) and §5.1 (the invariants).
+4. `make invariants` — 23 named witnesses, 1.5 seconds. 5. `docs/eval_report.md` — the numbers.
 
 ## D1 — package renamed `src/documentqa` → `src/qasystem` (P0)
 
