@@ -17,11 +17,10 @@
   },
   "dataset_size": 50,
   "min_coverage": 0.4,
-  "min_coverage_high": 0.8,
-  "min_dense": 0.52,
-  "min_dense_alone": 0.66,
+  "min_coverage_high": 0.75,
+  "min_dense": 0.54,
   "min_sentence_overlap": 0.15,
   "model_id": "Bge-m3",
-  "notes": "Grid-searched on the dev split of tests/eval/dataset.jsonl (plan.md section 9.3): maximise answered-on-answerable subject to a false-answer rate within 5%, preferring 0%. Scored with the production gate function, and the operating point re-measured on the held-out split by rebuilding the real service with it. EVIDENCE LIMIT: 50 questions over six documents, so one question is worth up to 0.05 recall and a single flipped answer moves a rate by a quarter. These are coarse operating points, not constants. Keyed on model_id: a calibrated file for another model is a hard error, never reused (D42, D51). `min_lexical` was removed in P10: `lexical_score` is bm25 divided by the best bm25 of the same query, so the top hit is exactly 1.0 for every query FTS matched, and the parameter could not discriminate (D58). `min_coverage_high` alone decides that branch, and a file still carrying the retired key loads unchanged.",
-  "version": 3
+  "notes": "Grid-searched on the dev split of tests/eval/dataset.jsonl (plan.md section 9.3): maximise answered-on-answerable subject to a false-answer rate within 5%, preferring 0%. Scored with the production gate function, and the operating point re-measured on the held-out split by rebuilding the real service with it. EVIDENCE LIMIT: 50 questions over six documents, so one question is worth up to 0.05 recall and a single flipped answer moves a rate by a quarter. These are coarse operating points, not constants. Keyed on model_id: a calibrated file for another model is a hard error, never reused (D42, D51). TWO THRESHOLDS WERE REMOVED, both because a value could not be set that was both safe and useful: `min_lexical`, on a signal that saturates at 1.0 for every query FTS matched (D58, D67), and `min_dense_alone`, the uncorroborated dense branch, because no available signal separates a real cross-lingual hit from a near-topic one -- so cross-lingual retrieval is NOT supported and a hit sharing no token with the question is refused (D69, D71). A file still carrying either retired key loads unchanged, so an older deployment keeps working.",
+  "version": 5
 }

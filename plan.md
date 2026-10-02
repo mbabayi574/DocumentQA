@@ -324,11 +324,16 @@ CANDIDATES_N=30  OVERFETCH=2  TOP_K=5  RRF_K=60
 DENSE_WEIGHT=0.9  LEXICAL_WEIGHT=0.1 # measured on the eval dev split; hybrid beats both
 #   single arms, so the lexical arm earns its 0.1 (D59)
 # config/thresholds.json — CALIBRATED by `make calibrate` on the eval dev split:
-GATE min_dense=0.52  min_dense_alone=0.66  min_coverage=0.40  min_lexical=0.80
-#   min_coverage_high=0.80  min_sentence_overlap=0.15   calibrated=true  version=2
+GATE min_dense=0.54  min_coverage=0.40  min_coverage_high=0.75  min_sentence_overlap=0.15
+#   calibrated=true  version=5
 #   Result: 0 false answers of 7 unanswerable on dev, 0 of 5 held out; 0.91/0.93 answered on
 #   answerable. 50 questions over six documents, so these are coarse operating points and the
 #   file records the split, the class balance and the evidence limit alongside the numbers.
+#   TWO thresholds were REMOVED because no value of them was both safe and useful (D67, D71):
+#   `min_lexical` (its signal saturates at 1.0 for every query FTS matched) and
+#   `min_dense_alone` (the uncorroborated dense branch, which carried cross-lingual retrieval and
+#   could not be made to work). EVERY path into the gate now requires coverage, so cross-lingual
+#   retrieval is NOT supported and a hit sharing no token with the question is refused.
 ```
 
 ---

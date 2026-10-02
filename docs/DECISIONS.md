@@ -1876,3 +1876,66 @@ prefer a typed domain error. The path is **unreachable from the API** — the ch
 produce is the speculative work §10 rule 16 forbids. The test pins the message (the part a
 reachable caller would rely on) *and* asserts the 4x gap, so a future chunker change that narrowed
 it turns this into a reachable path and fails here rather than in production.
+
+## D71 — cross-lingual retrieval is not supported, and the branch that carried it is gone
+
+The human was offered two routes after D69 and chose **the trade**: accept that cross-lingual
+retrieval is unsupported, rather than build a second signal the evaluation cannot validate. The
+uncorroborated dense branch is removed and the guarantee is stated as a fact about the system
+rather than about a threshold file.
+
+```diff
+- passed = (max_dense >= min_dense           AND coverage >= min_coverage)
+-       OR (max_dense >= min_dense_alone)                     # uncorroborated, D47
+-       OR (coverage   >= min_coverage_high)                   # exact terms
++ passed = (max_dense >= min_dense AND coverage >= min_coverage)
++       OR (coverage    >= min_coverage_high)                  # exact terms
+```
+
+**Every path into the gate now requires coverage.** So the consequence is exact and testable:
+**a hit sharing no token with the question is refused at any similarity** — `max_dense` 0.99
+included. `test_a_hit_sharing_no_token_with_the_question_is_refused_however_close_it_is` asserts
+that across the whole similarity range, and the two live tests assert it against real vectors.
+
+### Removing it cost nothing, and that is the finding
+
+Re-calibrated after the removal, the metrics are **identical**:
+
+| split | answered on answerable | false answers | gold quoted |
+|---|---|---|---|
+| dev (before) | 0.913 | 0 | 0.913 |
+| dev (after) | 0.913 | 0 | 0.913 |
+| held out (before) | 0.933 | 0 | 0.875 |
+| held out (after) | 0.933 | 0 | 0.875 |
+
+The operating point moved (`min_dense` 0.52 → 0.54, `min_coverage_high` 0.80 → 0.75) and the
+outcome did not. **So the branch was not what produced the two cross-lingual answers P9 measured.**
+`x01` (dense 0.618) and `m05` (0.628) were answered through *dense+coverage*, their coverage
+coming from same-language documents that happen to share incidental words with the question — not
+from the Persian document holding the answer. That is D61, and deleting the branch is what proved
+it: the capability that a bar nobody could set safely was "retaining" was never the mechanism.
+
+Which is the honest summary of four phases of cross-lingual work: **retrieval found the
+cross-lingual chunk reliably, and every answer that reached a user got there through lexical
+coincidence rather than through the embedding.**
+
+### What is now false, and said so
+
+`plan.md` §2 claimed cross-lingual retrieval as BGE-M3's headline property. It does not hold, the
+README says it does not hold, and `config/thresholds.json` records in its own notes that
+`min_dense_alone` was removed and why. The model's cross-lingual *retrieval* is real and
+measured (R@3 0.95, and the correct chunk is reliably in the window). What the system does not do
+is **answer** from it, and that is now a documented refusal rather than a bar that happened to
+admit some cases.
+
+### Two thresholds have now been removed, and the pattern is the point
+
+| removed | why it had no usable value |
+|---|---|
+| `min_lexical` | its signal saturates at 1.0 for every query FTS matched (D58, D67) |
+| `min_dense_alone` | no available signal separates a real cross-lingual hit from a near-topic one (D69, D71) |
+
+Both were thresholds documented as evidence and measuring nothing. §10 rule 18 calls an option
+with no caller "a bug waiting to be documented as a feature", and a threshold that cannot be set
+to any useful value is the same failure wearing a number. A file carrying either retired key still
+loads, so an existing deployment does not fail at startup over a key that no longer has a meaning.

@@ -116,20 +116,26 @@ def test_the_committed_report_quotes_the_committed_thresholds() -> None:
 async def test_the_recalibrated_gate_refuses_the_densest_unanswerable_question(
     graph: Services,
 ) -> None:
-    """D47 measured one unanswerable question admitted at the same similarity as the real
-    cross-lingual ones. The recalibrated `min_dense_alone` is above it, and this is the
-    measurement that says so -- the case is the densest unanswerable in the corpus."""
+    """The densest unanswerable case in the corpus, and the guarantee that refuses it.
+
+    D47 measured one unanswerable question admitted at the same similarity as the real
+    cross-lingual ones, which is what the uncorroborated branch existed to allow. That branch is
+    gone (D71), so the refusal is now structural rather than a matter of where a bar sits: every
+    path into the gate requires coverage, and this case's coverage is below `min_coverage`.
+    """
+    thresholds = graph.thresholds
     answer = await graph.retrieval.answer(
         "How do I configure a second listening port for the gateway?", debug=True
     )
     assert answer.status == "insufficient_information", (
-        f"the recalibrated gate admits the densest unanswerable case: {answer.answer[:120]}"
+        f"the gate admits the densest unanswerable case: {answer.answer[:120]}"
     )
     assert answer.citations == ()
-    assert answer.debug is not None
-    # And the reason is a threshold, not a retrieval accident.
-    assert answer.debug["gate"]["candidate_count"] > 0
-    assert answer.debug["gate"]["max_dense"] < graph.thresholds.min_dense_alone
+    gate = answer.debug["gate"]  # type: ignore[index]
+    # A threshold refused it, not a retrieval accident: the chunk was found, and it is close.
+    assert gate["candidate_count"] > 0  # type: ignore[index]
+    assert gate["max_dense"] > 0.5  # type: ignore[index]
+    assert gate["token_coverage"] < thresholds.min_coverage  # type: ignore[index]
 
 
 async def test_the_recalibrated_gate_answers_two_of_four_cross_lingual_questions(
@@ -160,13 +166,25 @@ async def test_the_recalibrated_gate_answers_two_of_four_cross_lingual_questions
             answered.append(case.id)
             assert answer.citations, case.id
         else:
-            # Refused, and specifically below the bar: the hit was retrieved and is close.
+            # Refused, and specifically for want of coverage: the hit was retrieved and is
+            # close, which is what makes this a decision rather than a retrieval failure.
             assert gate["max_dense"] > 0.4, (  # type: ignore[index]
                 f"{case.id} was refused because nothing was retrieved, not because of a bar"
             )
-            assert gate["max_dense"] < graph.thresholds.min_dense or (
-                gate["token_coverage"] < graph.thresholds.min_coverage  # type: ignore[index]
-            ), f"{case.id} was refused by some other rule than the corroborated bar"
+            # Refused by a bar rather than by a retrieval failure, stated as the gate's own
+            # contract: with the uncorroborated branch gone there are two disjuncts, and the
+            # refusal is that neither passed. Which of the three bars did the work differs per
+            # case -- `x08` clears `min_coverage` and is held out by `min_dense` -- so asserting
+            # a specific bar would be asserting a coincidence.
+            t = graph.thresholds
+            corroborated = (
+                gate["max_dense"] >= t.min_dense  # type: ignore[index]
+                and gate["token_coverage"] >= t.min_coverage  # type: ignore[index]
+            )
+            exact_terms = gate["token_coverage"] >= t.min_coverage_high  # type: ignore[index]
+            assert not corroborated and not exact_terms, (
+                f"{case.id} was refused although a disjunct should have passed: {gate}"
+            )
     assert answered == ["x01", "m05"], (
         f"cross-lingual answerability is now {answered} of {[c.id for c in cross]}; the "
         "calibration's cost or benefit has moved and section 12 question 3 needs the new number"

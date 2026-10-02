@@ -204,24 +204,23 @@ async def test_a_cross_lingual_hit_has_structurally_zero_coverage(
 async def test_cross_lingual_answerability_depends_on_the_corpus_not_on_the_model(
     live_env: dict[str, object],
 ) -> None:
-    """P9 measured the headline cross-lingual capability and it is not what section 2 claims.
+    """Cross-lingual retrieval is not supported, and the guarantee is now unconditional.
 
-    The same two questions, against the same 7-chunk Persian index, are **refused**. On the
-    49-chunk eval corpus and the 1225-chunk fixture corpus the same questions are **answered**
-    -- with the same model, the same embeddings and the same `max_dense` (0.513-0.547, measured
-    flat across all three corpus sizes). What differs is `token_coverage`: 0.00 on the 7-chunk
-    index, 0.40-0.50 on the larger ones, because some *unrelated* document happens to share
-    incidental words with the question.
+    D47's premise: an English question against a Persian source shares no token, so
+    `token_coverage` is structurally 0 and the old `dense_only` branch was the only path in. P10
+    removed that branch (D71) after measuring that no signal could make it both safe and reachable
+    (D69) — the same cross-language chunk scores 0.541 for an unanswerable question and 0.525 for
+    an answerable one.
 
-    So on this system cross-lingual retrieval works when another document lends it lexical
-    corroboration, and not otherwise. That is luck, not capability, and it is the measured form
-    of plan.md section 12 question 3: `min_dense_alone` is the only number that governs the
-    case, the calibration had to raise it above 0.609 to hold a 0% false-answer rate on dev, and
-    the correct cross-lingual hit sits at 0.513-0.547. D47's branch cannot be both safe and
-    reachable without a second signal, which is section 12's option (c).
+    So the refusal here is no longer "a bar happens to sit below this question". It is structural:
+    **a hit with zero coverage is refused at any similarity**, because every path into the gate
+    now requires coverage. This test asserts the guarantee rather than a number, which is the
+    difference between a fact about the system and a fact about a threshold file.
 
-    Asserted as a *finding*, so it fails loudly the day someone fixes it and section 12 gets its
-    answer. It is not a claim that this is correct behaviour.
+    P9 also measured that the *corpus* decided whether the same questions were answered at all —
+    0.00 coverage on this 7-chunk index, 0.40-0.50 on the 49- and 1225-chunk ones, because an
+    unrelated document lent incidental words. That is D61, and it is why those larger-corpus
+    answers were luck rather than capability.
     """
     await live_env["ingest"].ingest(PERSIAN_PDF.read_bytes(), PERSIAN_PDF.name)  # type: ignore[union-attr]
     service = retrieval(live_env)
@@ -237,10 +236,14 @@ async def test_cross_lingual_answerability_depends_on_the_corpus_not_on_the_mode
             "section 2, README and this test rather than leaving them describing a limitation "
             f"(gate said {gate['reason']}, max_dense {gate['max_dense']})."  # type: ignore[index]
         )
-        # And the refusal is specifically the cosine bar, not a retrieval accident: the hit was
-        # found, it is semantically close, and only `min_dense_alone` stands in the way.
-        assert gate["max_dense"] < thresholds.min_dense_alone  # type: ignore[index]
+        # A threshold refused it, not a retrieval accident: the chunk was found and it is close.
         assert gate["max_dense"] > 0.4, "the cross-lingual hit should still be retrieved"  # type: ignore[index]
+        # And the gate has no path for it at all: zero coverage, whatever the similarity.
+        assert gate["token_coverage"] == 0.0  # type: ignore[index]
+        assert not (  # type: ignore[index]
+            gate["max_dense"] >= thresholds.min_dense
+            and gate["token_coverage"] >= thresholds.min_coverage
+        )
         assert answer.citations == ()
 
 

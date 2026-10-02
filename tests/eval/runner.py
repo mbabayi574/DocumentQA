@@ -70,7 +70,7 @@ def strategies(dense_weight: float, lexical_weight: float) -> tuple[tuple[str, f
 
 
 #: §9.4 experiment 1: dense/lexical on a 0.1 lattice. The ends are the two single-arm
-#: baselines and 0.7 is the shipped default, so the lattice contains all three by construction.
+#: baselines and 0.9 is the shipped default, so the lattice contains all three by construction.
 WEIGHT_GRID: tuple[float, ...] = tuple(round(0.1 * i, 2) for i in range(11))
 
 #: §9.4 experiment 2, in tokens (x CHARS_PER_TOKEN=1.5 for characters). The grid runs well
@@ -495,27 +495,23 @@ def grid_search(
     feasible: list[tuple[Thresholds, Metrics]] = []
     tested = 0
     for min_dense in DENSE_GRID:
-        for min_dense_alone in DENSE_GRID:
-            if min_dense_alone < min_dense:
-                continue  # _validate rejects it; a weaker uncorroborated bar is meaningless
-            for min_coverage in COVERAGE_GRID:
-                for min_coverage_high in COVERAGE_HIGH_GRID:
-                    if min_coverage_high < min_coverage:
-                        continue
-                    point = Thresholds(
-                        min_dense=min_dense,
-                        min_dense_alone=min_dense_alone,
-                        min_coverage=min_coverage,
-                        min_coverage_high=min_coverage_high,
-                        min_sentence_overlap=min_sentence_overlap,
-                        version=1,
-                        calibrated=False,
-                        model_id=model_id,
-                    )
-                    tested += 1
-                    if any(evaluate(o.signals, point).passed for o in unanswerable):
-                        continue
-                    feasible.append((point, _verdict_metrics(rows, point, label="dev")))
+        for min_coverage in COVERAGE_GRID:
+            for min_coverage_high in COVERAGE_HIGH_GRID:
+                if min_coverage_high < min_coverage:
+                    continue
+                point = Thresholds(
+                    min_dense=min_dense,
+                    min_coverage=min_coverage,
+                    min_coverage_high=min_coverage_high,
+                    min_sentence_overlap=min_sentence_overlap,
+                    version=1,
+                    calibrated=False,
+                    model_id=model_id,
+                )
+                tested += 1
+                if any(evaluate(o.signals, point).passed for o in unanswerable):
+                    continue
+                feasible.append((point, _verdict_metrics(rows, point, label="dev")))
     return feasible, tested
 
 
@@ -683,11 +679,14 @@ def thresholds_payload(
             f"{dataset_size} questions over six documents, so one question is worth up to "
             "0.05 recall and a single flipped answer moves a rate by a quarter. These are "
             "coarse operating points, not constants. Keyed on model_id: a calibrated file "
-            "for another model is a hard error, never reused (D42, D51). `min_lexical` was "
-            "removed in P10: `lexical_score` is bm25 divided by the best bm25 of the same "
-            "query, so the top hit is exactly 1.0 for every query FTS matched, and the "
-            "parameter could not discriminate (D58). `min_coverage_high` alone decides that "
-            "branch, and a file still carrying the retired key loads unchanged."
+            "for another model is a hard error, never reused (D42, D51). TWO THRESHOLDS WERE "
+            "REMOVED, both because a value could not be set that was both safe and useful: "
+            "`min_lexical`, on a signal that saturates at 1.0 for every query FTS matched "
+            "(D58, D67), and `min_dense_alone`, the uncorroborated dense branch, because no "
+            "available signal separates a real cross-lingual hit from a near-topic one -- so "
+            "cross-lingual retrieval is NOT supported and a hit sharing no token with the "
+            "question is refused (D69, D71). A file still carrying either retired key loads "
+            "unchanged, so an older deployment keeps working."
         ),
     }
 
@@ -807,9 +806,16 @@ def render(
             )
         add("")
         add(f"§9.3's target is a false-answer rate within {MAX_FALSE_ANSWER_RATE:.0%} on both")
-        add("splits, preferring 0%. The first live run on the fixture corpus measured **1 in 9**")
-        add("(D47) — the trade-off in §12 question 3. Whether the eval corpus reproduces it is")
-        add("the number above.")
+        add("splits, preferring 0%, and it is met on both. The first live run on the fixture")
+        add("corpus measured **1 in 9** (D47), and the reason that does not reproduce here is")
+        add("D69 and D71: the uncorroborated branch that carried the false answers has been")
+        add("removed, and re-calibrating without it left every metric above **identical**. The")
+        add("2 088 feasible points are now chosen among thresholds where *every* path into the")
+        add("gate requires coverage, so a question whose evidence shares no token with it is")
+        add("refused however close the embedding. That is also why cross-lingual retrieval is")
+        add("**not supported**: retrieval still finds the cross-language chunk (R@3 is 0.95), but")
+        add("nothing the system can measure admits it, and D61 measured the two cross-lingual")
+        add("answers that did get through as lexical coincidence rather than the embedding.")
     else:
         add(calibration_error)
     add("")
@@ -851,10 +857,10 @@ def render(
         add('  "what port" and the sentence holding `0.0.0.0:8443` scores **0.067** against a')
         add("  0.15 bar, while the sentence beside it — which talks *about* the port without")
         add("  containing the number — scores **0.153** and is quoted instead. `fa02` asks")
-        add('  "which command" and')
-        add("  the gold sentence is a Markdown code fence at **0.000**: the command shares no word")
-        add("  with the question, and the word that connects them is in the section heading, not")
-        add("  the sentence. Word overlap cannot connect a question asked in words to an answer")
+        add('  "which command" and the gold sentence is a Markdown code fence at **0.000**: the')
+        add("  command shares no word with the question, and the word that connects them is in")
+        add("  the section heading, not the sentence. Word overlap cannot connect a question in")
+        add("  words to an answer")
         add("  given as a literal, and lowering the bar to reach these would pad every answer with")
         add("  unrelated sentences, which §7.3 forbids. This is the one place a dense re-score of")
         add("  candidate sentences would help — which is what `SENTENCE_RERANK` was for, and why")

@@ -12,7 +12,7 @@ the provider so ingest does no normalization of its own (§2).
 
 | configuration | answerable | unanswerable | R@1 | R@3 | R@5 | MRR@5 | answered | false answers | gold quoted |
 | dense-only | 38 | 12 | 0.68 | 0.95 | 0.95 | 0.807 | 0.92 | 0.00 | 0.92 |
-| lexical-only | 38 | 12 | 0.58 | 0.76 | 0.87 | 0.687 | 0.92 | 0.00 | 0.90 |
+| lexical-only | 38 | 12 | 0.58 | 0.76 | 0.87 | 0.687 | 0.89 | 0.00 | 0.89 |
 | hybrid | 38 | 12 | 0.76 | 0.95 | 0.95 | 0.846 | 0.92 | 0.00 | 0.90 |
 
 R@k is how many candidates it takes before **every** gold phrase is in the window, so
@@ -34,7 +34,7 @@ column requirement 4 of jobTask.md is actually about (D60).
 
 ## Latency
 
-- end to end, each question asked once, cold: **P50 341 ms, P95 1503 ms**, max 1762 ms
+- end to end, each question asked once, cold: **P50 358 ms, P95 1385 ms**, max 2847 ms
 - the same questions again with the query cache warm, so no network: **P50 10 ms**, P95 11 ms
 
 The tail is the embedding provider's, not this system's (D54). Everything here builds
@@ -55,15 +55,14 @@ qualification is measuring someone else's server.
 
 ```json
 {
-  "min_dense": 0.52,
-  "min_dense_alone": 0.66,
+  "min_dense": 0.54,
   "min_coverage": 0.4,
-  "min_coverage_high": 0.8,
+  "min_coverage_high": 0.75,
   "min_sentence_overlap": 0.15
 }
 ```
 
-Chosen by grid search on **dev** only: 8680 feasible of 51051 tested (a point is feasible when it refuses every
+Chosen by grid search on **dev** only: 2088 feasible of 4641 tested (a point is feasible when it refuses every
 unanswerable dev case). Reported on the held-out split by rebuilding the real
 service with these numbers.
 
@@ -73,9 +72,16 @@ service with these numbers.
 | test (held out) | 15 | 0.93 | 5 | 0 |
 
 §9.3's target is a false-answer rate within 5% on both
-splits, preferring 0%. The first live run on the fixture corpus measured **1 in 9**
-(D47) — the trade-off in §12 question 3. Whether the eval corpus reproduces it is
-the number above.
+splits, preferring 0%, and it is met on both. The first live run on the fixture
+corpus measured **1 in 9** (D47), and the reason that does not reproduce here is
+D69 and D71: the uncorroborated branch that carried the false answers has been
+removed, and re-calibrating without it left every metric above **identical**. The
+2 088 feasible points are now chosen among thresholds where *every* path into the
+gate requires coverage, so a question whose evidence shares no token with it is
+refused however close the embedding. That is also why cross-lingual retrieval is
+**not supported**: retrieval still finds the cross-language chunk (R@3 is 0.95), but
+nothing the system can measure admits it, and D61 measured the two cross-lingual
+answers that did get through as lexical coincidence rather than the embedding.
 
 ## Answered, but citing a source that does not contain the answer
 
@@ -112,10 +118,10 @@ whether a case has a *second* blocker is visible rather than assumed.
   "what port" and the sentence holding `0.0.0.0:8443` scores **0.067** against a
   0.15 bar, while the sentence beside it — which talks *about* the port without
   containing the number — scores **0.153** and is quoted instead. `fa02` asks
-  "which command" and
-  the gold sentence is a Markdown code fence at **0.000**: the command shares no word
-  with the question, and the word that connects them is in the section heading, not
-  the sentence. Word overlap cannot connect a question asked in words to an answer
+  "which command" and the gold sentence is a Markdown code fence at **0.000**: the
+  command shares no word with the question, and the word that connects them is in
+  the section heading, not the sentence. Word overlap cannot connect a question in
+  words to an answer
   given as a literal, and lowering the bar to reach these would pad every answer with
   unrelated sentences, which §7.3 forbids. This is the one place a dense re-score of
   candidate sentences would help — which is what `SENTENCE_RERANK` was for, and why
@@ -131,7 +137,7 @@ rate of 0.00 does not see, and `gold quoted` is the number that does.
 
 | dense | lexical | R@1 | R@3 | R@5 | MRR@5 | answered |
 |---|---|---|---|---|---|---|
-| 0.00 | 1.00 | 0.58 | 0.76 | 0.87 | 0.687 | 0.92 |
+| 0.00 | 1.00 | 0.58 | 0.76 | 0.87 | 0.687 | 0.89 |
 | 0.10 | 0.90 | 0.58 | 0.79 | 0.89 | 0.699 | 0.92 |
 | 0.20 | 0.80 | 0.63 | 0.82 | 0.89 | 0.736 | 0.92 |
 | 0.30 | 0.70 | 0.66 | 0.84 | 0.89 | 0.762 | 0.92 |

@@ -358,13 +358,21 @@ CALIBRATION_CASES = [
 
 
 def test_the_grid_search_refuses_any_point_that_answers_an_unanswerable_case() -> None:
+    """Feasibility is still a real constraint, and it is the coverage bars that enforce it.
+
+    With the uncorroborated dense branch removed (D71) there are only two ways in, and both
+    require coverage, so an unanswerable case is held out by whichever of ``min_dense`` (below
+    0.30 it cannot pass the corroborated branch) and the two coverage bars is stricter. The
+    fixtures make the arithmetic visible: the unanswerable band is dense 0.30 / coverage 0.0, and
+    a feasible point must sit clear of it on at least one axis.
+    """
     feasible, tested = grid_search(CALIBRATION_CASES, min_sentence_overlap=0.15, model_id="fake")
     assert tested > 0
     assert feasible, "expected at least one feasible point"
     for point, _ in feasible:
-        assert point.min_dense_alone > 0.30, (
-            "a point whose dense-only bar is at or below the unanswerable band's max_dense "
-            "would admit it"
+        assert point.min_dense > 0.30 or point.min_coverage > 0.0, (
+            "a point below the unanswerable dense band AND at zero coverage would admit them "
+            "through the corroborated branch"
         )
 
 
@@ -373,7 +381,6 @@ def test_choose_maximises_answered_on_answerable_and_takes_the_strictest_bar() -
     answers, the one that refuses the most marginal evidence is the one to ship."""
     loose = Thresholds(
         min_dense=0.40,
-        min_dense_alone=0.50,
         min_coverage=0.2,
         min_coverage_high=0.5,
         min_sentence_overlap=0.15,
@@ -383,7 +390,6 @@ def test_choose_maximises_answered_on_answerable_and_takes_the_strictest_bar() -
     )
     strict = Thresholds(
         min_dense=0.45,
-        min_dense_alone=0.58,
         min_coverage=0.2,
         min_coverage_high=0.5,
         min_sentence_overlap=0.15,
@@ -466,9 +472,10 @@ def test_calibrate_wrote_a_loadable_thresholds_file(settings: Any, outcome: Any)
     assert settings.thresholds_path.exists()
     loaded = load_thresholds(settings.thresholds_path, model_id=FakeEmbedder().model_id)
     assert loaded.calibrated is True
-    assert loaded == outcome.calibration.thresholds or loaded.min_dense_alone == (
-        outcome.calibration.thresholds.min_dense_alone
-    )
+    # The bars must match what the grid chose. `calibrated` cannot: the grid builds candidate
+    # points at version=1/calibrated=False and the payload stamps the file as calibrated.
+    for name in ("min_dense", "min_coverage", "min_coverage_high", "min_sentence_overlap"):
+        assert getattr(loaded, name) == getattr(outcome.calibration.thresholds, name), name
     payload = json.loads(settings.thresholds_path.read_text(encoding="utf-8"))
     assert payload["dataset_size"] == 50
     assert sum(payload["class_balance"].values()) == 50
@@ -593,7 +600,6 @@ def test_a_calibration_carries_the_numbers_that_produced_it() -> None:
     calibration = Calibration(
         thresholds=Thresholds(
             min_dense=0.4,
-            min_dense_alone=0.5,
             min_coverage=0.2,
             min_coverage_high=0.5,
             min_sentence_overlap=0.15,

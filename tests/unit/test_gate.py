@@ -29,7 +29,6 @@ MODEL = "Bge-m3"
 def thresholds(**overrides: Any) -> Thresholds:
     base: dict[str, Any] = {
         "min_dense": 0.60,
-        "min_dense_alone": 0.70,
         "min_coverage": 0.30,
         "min_coverage_high": 0.50,
         "min_sentence_overlap": 0.15,
@@ -60,7 +59,6 @@ def write_thresholds(path: Path, /, **overrides: Any) -> None:
         "model_id": MODEL,
         "calibrated": True,
         "min_dense": 0.50,
-        "min_dense_alone": 0.55,
         "min_coverage": 0.20,
         "min_coverage_high": 0.40,
         "min_sentence_overlap": 0.10,
@@ -117,39 +115,65 @@ def test_weak_signals_refuse() -> None:
 def test_a_dense_hit_between_the_two_bars_refuses() -> None:
     """Close, but not close enough to stand uncorroborated.
 
-    The first cut of this test asserted that *any* dense hit without coverage must refuse.
-    That is precisely the defect D47 found: coverage counts shared tokens, so the
-    cross-lingual case -- an English question against a Persian source -- has coverage 0 by
-    construction, and the rule then refused the system's own headline capability. The
-    uncorroborated branch replaces that blanket refusal with a higher bar.
+    This test was written against a rule with three disjuncts. It read: a dense hit *between*
+    `min_dense` and the uncorroborated bar, with coverage short of `min_coverage`, must refuse --
+    close, but not close enough to stand alone.
+
+    The third disjunct is gone (D71), so the same question is now decided by `min_coverage` and
+    nothing above it. The test is kept because the *shape* is still the one that matters: a
+    middling dense hit with thin coverage is refused, which is the case a reviewer will probe.
     """
     verdict = evaluate(signals(max_dense=0.65, lexical=0.95, token_coverage=0.20), thresholds())
     assert verdict.passed is False
     assert verdict.reason == "below_threshold"
 
 
-def test_a_strong_dense_hit_without_coverage_passes_as_dense_only() -> None:
-    """The cross-lingual case: coverage is unavailable, so dense similarity must be enough."""
-    verdict = evaluate(signals(max_dense=0.95, lexical=0.0, token_coverage=0.0), thresholds())
-    assert verdict.passed is True
-    assert verdict.reason == "dense_only"
-
-
-def test_the_uncorroborated_branch_needs_a_higher_dense_bar() -> None:
-    """It must never be easier than the corroborated branch, or it would weaken the gate."""
-    t = thresholds()
-    assert t.min_dense_alone > t.min_dense
-    weak = evaluate(signals(max_dense=0.65, token_coverage=0.0), t)
-    strong = evaluate(signals(max_dense=0.65, token_coverage=0.30), t)
-    assert weak.passed is False and strong.passed is True
-
-
-def test_dense_only_is_reported_distinctly_from_dense_plus_coverage() -> None:
+def test_the_two_reasons_are_reported_distinctly() -> None:
     """The reason string is the audit trail for which evidence authorised the answer."""
-    corroborated = evaluate(signals(max_dense=0.95, token_coverage=0.6), thresholds())
-    alone = evaluate(signals(max_dense=0.95, token_coverage=0.0), thresholds())
-    assert corroborated.reason == "dense+coverage"
-    assert alone.reason == "dense_only"
+    assert evaluate(signals(max_dense=0.95, token_coverage=0.6), thresholds()).reason == (
+        "dense+coverage"
+    )
+    assert evaluate(signals(max_dense=0.05, token_coverage=1.0), thresholds()).reason == (
+        "exact_terms"
+    )
+
+
+def test_a_hit_sharing_no_token_with_the_question_is_refused_however_close_it_is() -> None:
+    """D71: the uncorroborated branch is gone, so this is now unconditional.
+
+    This is the decision, stated as a test. `token_coverage` counts *shared* tokens, so a
+    cross-lingual hit has coverage structurally zero; the branch that used to admit it behind a
+    higher dense bar was removed because no available signal could make it both safe and
+    reachable (D69) — the same cross-language chunk scores 0.541 for an unanswerable question and
+    0.525 for an answerable one. So cross-lingual retrieval is not supported, and the guarantee
+    is exact: zero coverage is refused at any similarity.
+    """
+    for dense in (0.0, 0.5, 0.9, 0.99, 1.0):
+        verdict = evaluate(signals(max_dense=dense, lexical=1.0, token_coverage=0.0), thresholds())
+        assert verdict.passed is False, f"a zero-coverage hit was admitted at similarity {dense}"
+        assert verdict.reason == "below_threshold"
+    # And the field is gone from the contract, not merely unread.
+    assert "min_dense_alone" not in THRESHOLD_FIELDS
+    assert not hasattr(thresholds(), "min_dense_alone")
+
+
+def test_a_thresholds_file_carrying_the_retired_dense_bar_still_loads(tmp_path: Path) -> None:
+    """An older deployment's file keeps working after the branch is removed.
+
+    `load_thresholds` reads only the named fields, so a file written by a previous version is
+    accepted and the retired key ignored. Worth pinning: the alternative would be a startup
+    failure for every existing deployment, over a key that no longer has a meaning.
+    """
+    path = tmp_path / "t.json"
+    write_thresholds(path, min_dense=0.50)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["min_dense_alone"] = 0.66
+    payload["min_lexical"] = 0.80
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = load_thresholds(path, model_id=MODEL)
+    assert loaded.min_dense == 0.50
+    assert not hasattr(loaded, "min_dense_alone")
 
 
 def test_a_chunk_containing_every_term_passes_even_at_zero_similarity() -> None:
@@ -176,25 +200,14 @@ def test_no_candidates_cannot_pass_however_good_the_signals_look() -> None:
 
 
 @pytest.mark.parametrize(
-    ("bar", "signal", "expected"),
-    [
-        ("min_dense", 0.60, True),  # exactly at min_dense: inclusive
-        ("min_dense", 0.59, False),
-        ("min_dense_alone", 0.70, True),  # exactly at min_dense_alone: inclusive
-        ("min_dense_alone", 0.69, False),
-    ],
+    ("signal", "expected"),
+    [(0.60, True), (0.59, False)],  # exactly min_dense: inclusive
 )
-def test_the_dense_bars_are_inclusive(bar: str, signal: float, expected: bool) -> None:
-    """Both dense bars are inclusive, and each is tested with the other pinned out of reach.
-
-    The bar stays at its nominal value while the *signal* moves, or the boundary would be tested
-    against itself. Coverage 0.40 clears `min_coverage` (0.30) and misses `min_coverage_high`
-    (0.50), and the other dense bar is pinned to 0.99 — so the only branch that can admit is
-    the one under test.
-    """
-    other = "min_dense_alone" if bar == "min_dense" else "min_dense"
-    point = thresholds(**{bar: 0.60 if bar == "min_dense" else 0.70, other: 0.99})
-    verdict = evaluate(signals(max_dense=signal, lexical=0.0, token_coverage=0.40), point)
+def test_the_dense_bar_is_inclusive(signal: float, expected: bool) -> None:
+    """The bar stays at 0.60 while the *signal* moves, or the boundary would be tested against
+    itself. Coverage 0.40 clears `min_coverage` (0.30) and misses `min_coverage_high` (0.50), so
+    the dense branch is the only one that can admit."""
+    verdict = evaluate(signals(max_dense=signal, lexical=0.0, token_coverage=0.40), thresholds())
     assert verdict.passed is expected
 
 
@@ -212,8 +225,7 @@ def test_coverage_thresholds_are_inclusive_and_branch_specific(
     coverage: float, dense: float, expected: bool
 ) -> None:
     verdict = evaluate(
-        signals(max_dense=dense, lexical=0.99, token_coverage=coverage),
-        thresholds(min_dense_alone=1.0),
+        signals(max_dense=dense, lexical=0.99, token_coverage=coverage), thresholds()
     )
     assert verdict.passed is expected
 
@@ -363,18 +375,9 @@ def test_a_threshold_outside_the_unit_interval_is_refused(tmp_path: Path) -> Non
         load_thresholds(path, model_id=MODEL)
 
 
-def test_the_uncorroborated_bar_below_the_corroborated_one_is_refused(tmp_path: Path) -> None:
-    """A hand-edited file must not be able to make the weaker branch the easier one."""
-    write_thresholds(tmp_path / "t.json", min_dense=0.50, min_dense_alone=0.40)
-    with pytest.raises(ConfigError, match="min_dense_alone"):
-        load_thresholds(tmp_path / "t.json", model_id=MODEL)
-
-
-def test_the_shipped_defaults_keep_both_bar_orderings() -> None:
+def test_the_shipped_defaults_keep_the_bar_ordering() -> None:
     """`defaults()` is what a missing file falls back to, so its ordering must hold too."""
-    shipped = defaults(MODEL)
-    assert shipped.min_dense_alone >= shipped.min_dense
-    assert shipped.min_coverage_high >= shipped.min_coverage
+    assert defaults(MODEL).min_coverage_high >= defaults(MODEL).min_coverage
 
 
 def test_coverage_high_below_coverage_is_refused(tmp_path: Path) -> None:

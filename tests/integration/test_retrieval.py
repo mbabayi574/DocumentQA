@@ -80,7 +80,6 @@ def thresholds(**overrides: Any) -> Thresholds:
         "min_dense": 0.05,
         # Above every similarity the fake embedder produces for an unrelated pair, so the
         # uncorroborated dense branch stays out of the way: these tests are about coverage.
-        "min_dense_alone": 0.99,
         "min_coverage": 0.70,
         "min_coverage_high": 0.90,
         "min_sentence_overlap": 0.15,
