@@ -2393,3 +2393,50 @@ value, or someone renames a field and leaves the example behind. Neither shows u
 tree whose `.env` is populated. This is the third instance of D31's shape — a fixture, then a
 path in a docstring, now a setup file — and each one needed a different guard because each was
 invisible to the previous two.
+
+## D80 — an intermittent live failure, recorded rather than guessed at (P11)
+
+**Context:** during P11's `make live` gate, `tests/integration/test_system_live.py::
+test_the_whole_fixture_corpus_serves_both_languages_then_survives_a_delete` failed **twice** —
+once in a full `make live` run and once standalone — out of roughly 40 invocations. Every
+subsequent run passed: 20 consecutive attempts in a dedicated collector, plus the full suite
+twice.
+**Decision:** not fixed. Recorded here with what is known and what is not.
+**What is established.** It is an **assertion** failure, not an error or an exception, so the
+1225-chunk ingest completed. It occurs only under `RUN_LIVE=1` against the real provider; the
+offline suite uses `FakeEmbedder` and has never shown it. It has not recurred in 20 consecutive
+dedicated attempts.
+**What is not.** The assertion text was never captured, across ten attempts made specifically to
+capture it — a re-run reported green each time, which is the least useful possible diagnostic.
+So the cause is **not established**, and this entry deliberately does not name a culprit.
+
+**The two candidates, and why neither was adopted.** The first was a request-count assertion:
+the test asserts `39 <= embedder.requests <= 48`, and `requests` counts batches. That hypothesis
+was **wrong** — `requests += 1` sits above the retry loop, so a provider retry does not move it,
+which `client.py` says in a comment and which checking confirmed. The surviving candidate is the
+D56 class: the test asserts *exact* expectations — that a specific document is cited first —
+against Chroma's HNSW index, which is approximate. A top-1 can flip with insertion order and
+thread scheduling. That is consistent with everything observed, and it is **still a hypothesis**,
+because the two hypotheses make different predictions and I could not run the discriminating
+experiment to a conclusion.
+
+**Why it was not "fixed" anyway.** The tempting repair is to loosen the exact assertions to
+`in (...)` or add a retry decorator, and both would convert a real signal into a green tick
+without knowing what the signal was. `plan.md` §0.3 and §0.9 cover this: never weaken a test to
+get green, and after three failed attempts on one problem, report. The honest state is "observed
+twice, cause unknown, has not recurred" — which is a weaker claim than a fix and a stronger one
+than a silence.
+
+**How to settle it.** Run the test in a loop with `--tb=long` and keep the output of the *failing*
+run rather than re-running until green. A single captured traceback names the assertion, and
+everything above becomes answerable in one read.
+
+### Also found by the clean-clone check: `make run` needs the real provider
+
+Verifying §0.11 surfaced a usability gap worth one sentence in the README rather than a code
+change. `APP_ENV=test EMBEDDING_PROVIDER=fake make run` **fails to start**, correctly: the
+shipped `config/thresholds.json` is calibrated for `Bge-m3` and I9 refuses to reuse another
+model's measurements, and the fake embedder reports `model_id="fake-embedder"`. That is the
+invariant working. But a reader who wants to try the system without a token hits a `ConfigError`
+that reads like a bug. The README now says so and names the two ways out: set a real token, or
+point `THRESHOLDS_PATH` at a file calibrated for the fake model.
