@@ -2404,8 +2404,14 @@ twice.
 **Decision:** not fixed. Recorded here with what is known and what is not.
 **What is established.** It is an **assertion** failure, not an error or an exception, so the
 1225-chunk ingest completed. It occurs only under `RUN_LIVE=1` against the real provider; the
-offline suite uses `FakeEmbedder` and has never shown it. It has not recurred in 20 consecutive
-dedicated attempts.
+offline suite uses `FakeEmbedder` and has never shown it.
+**Frequency, updated after a third occurrence.** Three failures in roughly 60 invocations by the
+end of P11 — the original `make live` failure, one standalone run, and one more `make live` during
+the final gate, which passed on immediate re-run. Long clean stretches still occur: 20
+consecutive passes in a dedicated collector, and 3 consecutive full-suite passes. So the honest
+statement is **intermittent at a low rate, roughly 1 in 20, with long clean runs between**. An
+earlier draft of this entry said "has not recurred in 20 attempts" as though that were evidence
+of a fix; it was evidence of a gap in observation, and the third failure corrected it.
 **What is not.** The assertion text was never captured, across ten attempts made specifically to
 capture it — a re-run reported green each time, which is the least useful possible diagnostic.
 So the cause is **not established**, and this entry deliberately does not name a culprit.
@@ -2429,7 +2435,11 @@ than a silence.
 
 **How to settle it.** Run the test in a loop with `--tb=long` and keep the output of the *failing*
 run rather than re-running until green. A single captured traceback names the assertion, and
-everything above becomes answerable in one read.
+everything above becomes answerable in one read. P11 tried this for roughly 15 attempts and never
+caught one; the collector must keep *every* run's output, not just re-run and re-check, because a
+re-run reports green and destroys the only thing worth having. D81 shows the cost of not
+capturing evidence: the same mistake, made about the repository's own instructions, cost a
+wrong recommendation in two files until a clean clone caught it.
 
 ### Also found by the clean-clone check: `make run` needs the real provider
 
