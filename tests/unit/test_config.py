@@ -135,7 +135,6 @@ def test_defaults_match_plan(settings_factory) -> None:
     assert settings.chroma_path == Path("./data/chroma")
     assert settings.sqlite_path == Path("./data/qasystem.db")
     assert settings.max_upload_mb == 20
-    assert settings.sentence_rerank is False
 
 
 def test_embedding_client_defaults_match_the_measured_provider_caps(settings_factory) -> None:

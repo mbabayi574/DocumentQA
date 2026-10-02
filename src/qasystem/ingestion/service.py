@@ -35,10 +35,10 @@ import hashlib
 import logging
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Literal
+from typing import Literal
 
 from qasystem.chunking.chunker import Chunker
 from qasystem.domain.models import Chunk, VectorItem
@@ -407,13 +407,6 @@ class IngestionService:
             status=status,
             error_code=error_code,
         )
-
-
-def _int_or_none(row: Mapping[str, Any] | None, key: str) -> int | None:
-    """SQLite columns are ``Any``; this keeps the conversion in one place."""
-    if row is None or row[key] is None:
-        return None
-    return int(row[key])
 
 
 def _ms(started: float) -> int:

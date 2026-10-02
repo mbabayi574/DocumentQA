@@ -2017,3 +2017,52 @@ an oversight someone will later "fix" by adding a useless example.
 This is also P11's consistency pass finding its first real defect by accident: the same
 docstring-versus-schema class of problem §11 lists, found by reading the schema as a user rather
 than by grepping the source.
+
+## D73 — the query LRU cache is deleted, not wired up (P11)
+
+**Context:** `CachingEmbedder` had three cache layers: the persistent SQLite
+`embedding_cache`, and in front of it a bounded in-process LRU reached through
+`embed_query()`, with its own `query_lru_size` knob. P11's audit found the query path never
+calls it: `RetrievalService.retrieve` reaches the embedder through `embed([question])`
+(`retrieval/service.py:128`), so `embed_query` had exactly one caller in the whole repository —
+its own unit test.
+**Decision:** delete `embed_query`, the LRU, the `query_lru_size` parameter, and
+`DEFAULT_QUERY_LRU_SIZE`. No replacement.
+**Evidence:** the property the LRU existed to provide is already met by the cache that is
+actually on the path. `tests/unit/test_embed_caching.py::test_a_partial_hit_embeds_only_the_misses`
+proves offline that a repeated input costs no embedding request, and
+`tests/integration/test_retrieval_live.py::test_a_repeated_question_costs_no_embedding_request`
+proves it through the real query path against real BGE-M3 vectors. D63 measured what the LRU
+would have saved: the warm-cache path is **P50 10 ms** of our own work against a **354 ms**
+provider call. A third cache in front of the second bought 10 ms on a 364 ms query, at the cost
+of a cache to populate, a policy to tune, a knob to document and two tests to maintain.
+**Consequence:** plan.md §7.1 step 2 still reads "embed the query (LRU-cached)". That parenthetical
+is now false and was left for R9's consistency pass rather than edited here, so this entry and
+the plan correction land as separate commits.
+
+### The same pass, four more deletions
+
+`sentence_rerank` went with it, for a related reason. It had zero readers in `src` — D65 and
+D1630 already record that §9.4's `SENTENCE_RERANK` has no implementation, so the field was a
+promise with no code behind it, and `.env.example` advertised it as a live knob. §10 rule 18:
+an option with no caller is a bug waiting to be documented as a feature. The references in
+`plan.md` §7.4/§9.4 and D1060/D1630/D1774 stay, because those record that the experiment was
+*considered and not run* — deleting the field is not the same as deleting the record.
+
+Also deleted, each verified to have no reader: `_int_or_none` (`ingestion/service.py`), and three
+parameters nothing read — `_install_request_id(app, settings)`, `replace_document(...,
+request)`, and `_join(self, question, ...)`. `Mapping` and `Any` went with `_int_or_none`, since
+it was their last consumer in that module.
+
+### A fourth deletion the audit missed
+
+Checking *why* `_install_request_id` did not use its `settings` argument found the reason: it
+never needed one. `create_app` already calls `configure_logging(resolved)`, which installs
+`SecretRedactionFilter` on the handler, so the middleware's log lines are scrubbed before they
+are written. The argument was dead because the job was already done elsewhere.
+
+Following that thread found a genuine duplicate: `api/app.py` and `logging_setup.py` each
+defined `_secrets_of(settings)` — two copies of the same three lines, which is exactly the kind
+of pair that drifts and leaks the token on the side that loses the race. `_secrets_of` is now
+`logging_setup.secrets_of`, public, one definition, imported by `api/app.py`. I8 is a release
+blocker and it is enforced by two callers of one function instead of two copies of a function.

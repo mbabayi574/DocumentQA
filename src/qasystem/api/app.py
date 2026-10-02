@@ -33,7 +33,7 @@ from qasystem.api.deps import Services, build_services
 from qasystem.api.routes import router
 from qasystem.config import Settings, get_settings
 from qasystem.errors import QASystemError
-from qasystem.logging_setup import configure_logging, scrub
+from qasystem.logging_setup import configure_logging, scrub, secrets_of
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def create_app(settings: Settings | None = None, *, services: Services | None = 
     app.state.settings = resolved
     app.include_router(router)
     _install_error_handlers(app, resolved)
-    _install_request_id(app, resolved)
+    _install_request_id(app)
     return app
 
 
@@ -90,7 +90,7 @@ def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
         return JSONResponse(
             status_code=exc.http_status,
             content=_envelope(
-                exc.code, scrub(_secrets_of(settings), str(exc)), request.state.request_id
+                exc.code, scrub(secrets_of(settings), str(exc)), request.state.request_id
             ),
         )
 
@@ -118,7 +118,7 @@ def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
         )
 
 
-def _install_request_id(app: FastAPI, settings: Settings) -> None:
+def _install_request_id(app: FastAPI) -> None:
     """Stamp every response, and log one line per request with no payload in it."""
 
     @app.middleware("http")
@@ -156,8 +156,3 @@ def _summarise_validation(exc: RequestValidationError) -> str:
         location = ".".join(str(item) for item in error.get("loc", ())) or "body"
         parts.append(f"{location}: {error.get('msg', 'invalid')}")
     return "; ".join(parts)[:500]
-
-
-def _secrets_of(settings: Settings) -> tuple[str, ...]:
-    token = settings.embedding_api_key
-    return (token.get_secret_value(),) if token is not None else ()

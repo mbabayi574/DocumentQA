@@ -14,14 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from qasystem.domain.ports import Embedder
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_QUERY_LRU_SIZE = 128
 
 
 def input_hash(text: str) -> str:
@@ -40,17 +38,9 @@ class EmbeddingCache(Protocol):
 class CachingEmbedder:
     """Wraps an ``Embedder`` so repeated inputs are served from the cache."""
 
-    def __init__(
-        self,
-        inner: Embedder,
-        cache: EmbeddingCache,
-        *,
-        query_lru_size: int = DEFAULT_QUERY_LRU_SIZE,
-    ) -> None:
+    def __init__(self, inner: Embedder, cache: EmbeddingCache) -> None:
         self._inner = inner
         self._cache = cache
-        self._query_lru_size = query_lru_size
-        self._query_lru: MutableMapping[str, list[float]] = {}
 
     @property
     def model_id(self) -> str:
@@ -86,19 +76,6 @@ class CachingEmbedder:
             self._put(self.model_id, dict(zip(missing, fresh, strict=True)))
             found.update(zip(missing, fresh, strict=True))
         return [found[digest] for digest in hashes]
-
-    async def embed_query(self, text: str) -> list[float]:
-        """Embed one query, memoized in a bounded LRU so repeated questions are free."""
-        digest = input_hash(text)
-        hit = self._query_lru.get(digest)
-        if hit is not None:
-            return hit
-        vector = (await self.embed([text]))[0]
-        if len(self._query_lru) >= self._query_lru_size:
-            # Cheap eviction: dicts keep insertion order, so the first key is the oldest.
-            del self._query_lru[next(iter(self._query_lru))]
-        self._query_lru[digest] = vector
-        return vector
 
     async def _embed(self, texts: Sequence[str]) -> list[list[float]]:
         return await self._inner.embed(texts)

@@ -218,7 +218,6 @@ async def create_document(
 )
 async def replace_document(
     doc_id: str,
-    request: Request,
     services: ServicesDep,
     file: Annotated[UploadFile, File()],
 ) -> JSONResponse:

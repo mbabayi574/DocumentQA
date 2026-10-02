@@ -32,7 +32,6 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["dev", "test", "demo", "prod"] = "dev"
-    sentence_rerank: bool = False
 
     # --- embedding service (embeddings only: there is no chat endpoint, C3) ---
     embedding_base_url: str = "https://models-interview.arvancloudai.ir/v1"

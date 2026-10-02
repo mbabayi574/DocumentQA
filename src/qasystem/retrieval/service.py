@@ -130,7 +130,7 @@ class RetrievalService:
         dense_hits = self._vectors.query(vector, self._dense_n)
 
         fused, rows = self._join(
-            question, dense_hits, lexical_hits, doc_ids, language, dense_weight, lexical_weight
+            dense_hits, lexical_hits, doc_ids, language, dense_weight, lexical_weight
         )
         # L7: a stale or filtered-out vector must not be able to starve the window. When the
         # vector store had more to give and eligibility dropped a lot of it, ask once more.
@@ -146,7 +146,7 @@ class RetrievalService:
                 )
                 dense_hits = wider
                 fused, rows = self._join(
-                    question, wider, lexical_hits, doc_ids, language, dense_weight, lexical_weight
+                    wider, lexical_hits, doc_ids, language, dense_weight, lexical_weight
                 )
 
         return self._candidates(question, fused, rows, dense_hits, lexical_hits, limit)
@@ -242,7 +242,6 @@ class RetrievalService:
 
     def _join(
         self,
-        question: str,
         dense_hits: Sequence[VectorHit],
         lexical_hits: Sequence[LexicalHit],
         doc_ids: Sequence[str] | None,

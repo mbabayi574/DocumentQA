@@ -97,32 +97,6 @@ async def test_an_empty_call_is_a_no_op(inner: FakeEmbedder) -> None:
     assert inner.requests == 0
 
 
-async def test_a_repeated_query_skips_the_cache_read_entirely() -> None:
-    """The LRU is in front of the persistent cache; a hit costs no SQLite round-trip."""
-    inner = FakeEmbedder(dimension=8)
-    cache = CountingCache()
-    embedder = CachingEmbedder(inner, cache, query_lru_size=2)
-    await embedder.embed_query("q1")
-    cache.hits = cache.misses = 0
-    await embedder.embed_query("q1")
-    assert (cache.hits, cache.misses) == (0, 0)
-    assert inner.texts_embedded == 1
-
-
-async def test_an_evicted_query_falls_back_to_the_persistent_cache() -> None:
-    """Eviction must cost a cache read, never a second embedding request."""
-    inner = FakeEmbedder(dimension=8)
-    cache = CountingCache()
-    embedder = CachingEmbedder(inner, cache, query_lru_size=2)
-    await embedder.embed_query("q1")
-    await embedder.embed_query("q2")
-    await embedder.embed_query("q3")  # evicts q1
-    assert inner.texts_embedded == 3
-    await embedder.embed_query("q1")
-    assert inner.texts_embedded == 3
-    assert cache.hits == 1
-
-
 async def test_the_embedder_exposes_the_inners_model_and_dimension() -> None:
     inner = FakeEmbedder(dimension=8, model_id="Bge-m3")
     embedder = CachingEmbedder(inner, CountingCache())

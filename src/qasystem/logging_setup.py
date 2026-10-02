@@ -49,7 +49,7 @@ def configure_logging(
     """Install one stderr handler whose filter knows the configured token."""
     handler = logging.StreamHandler(stream or sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    handler.addFilter(SecretRedactionFilter(_secrets_of(settings)))
+    handler.addFilter(SecretRedactionFilter(secrets_of(settings)))
 
     root = logging.getLogger()
     for existing in list(root.handlers):
@@ -59,7 +59,13 @@ def configure_logging(
     return root
 
 
-def _secrets_of(settings: Settings | None) -> tuple[str, ...]:
+def secrets_of(settings: Settings | None) -> tuple[str, ...]:
+    """The strings that must never reach a log or an error body (I8).
+
+    Public because two callers need it: the handler filter installed by
+    ``configure_logging``, and ``api/app.py`` scrubbing a domain error's message before it
+    is returned. One definition, so the two cannot drift.
+    """
     if settings is None or settings.embedding_api_key is None:
         return ()
     return (settings.embedding_api_key.get_secret_value(),)
