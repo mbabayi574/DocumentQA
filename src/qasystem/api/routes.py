@@ -20,7 +20,7 @@ import json
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import JSONResponse, Response
 
 from qasystem.answering.extractive import Answer
@@ -64,6 +64,46 @@ def error(status_code: int, code: str, message: str, request: Request) -> JSONRe
             }
         },
     )
+
+
+#: Every route that takes a path or query parameter can fail validation, and the app converts
+#: that into `VALIDATION_ERROR` inside the one error envelope (`_install_validation_error`).
+#: Declaring it once here is what stops FastAPI's default `HTTPValidationError` -- a body the
+#: API never returns -- from creeping back into the schema on the routes that forget to.
+#: Found by reading what `/docs` advertised; `test_the_schema_never_advertises_an_error_shape_
+#: the_api_does_not_return` is what keeps it out.
+INVALID_QUERY: dict[int | str, dict[str, Any]] = {422: {"model": ErrorEnvelope}}
+
+#: Swagger UI's "Try it out" prefills from these, and they live on the *body parameter* rather
+#: than on the model because OpenAPI places examples beside the schema, not inside it -- on the
+#: model they land in `components.schemas` and Swagger never reads them. Without an example the
+#: textarea opens as `{"question": ""}`, which the API rejects, so the first click a new user makes
+#: is a 422. The three cover the three things a caller actually wants to try: a plain question, a
+#: question with gate diagnostics, and a narrowed Persian question.
+QUERY_EXAMPLES = [
+    {
+        "summary": "A question the corpus can answer",
+        "description": "Narrows nothing, so retrieval and the gate decide.",
+        "value": {"question": "What port does the gateway listen on by default?"},
+    },
+    {
+        "summary": "Gate diagnostics",
+        "description": (
+            "Returns the gate's own signals with the answer, which is how you see why something "
+            "was refused instead of guessing at a threshold."
+        ),
+        "value": {"question": "What does error code AUR-2291 report?", "debug": True},
+    },
+    {
+        "summary": "Narrowed to one document and one language",
+        "description": "Filters only narrow the search; they never widen it.",
+        "value": {
+            "question": "کد خطای AUR-6107 چه مشکلی را گزارش می‌کند؟",
+            "doc_ids": ["incident-runbook"],
+            "language": "fa",
+        },
+    },
+]
 
 
 # ---------------------------------------------------------------- ops
@@ -143,7 +183,10 @@ async def create_document(
     request: Request,
     services: ServicesDep,
     file: Annotated[UploadFile, File(description="PDF, TXT or Markdown")],
-    doc_id: Annotated[str | None, Form(description="Defaults to a slug of the filename")] = None,
+    doc_id: Annotated[
+        str | None,
+        Form(description="Defaults to a slug of the filename", examples=["handbook"]),
+    ] = None,
 ) -> JSONResponse:
     """Add a document, or report that it is already here unchanged.
 
@@ -169,7 +212,7 @@ async def create_document(
 @router.put(
     "/documents/{doc_id}",
     response_model=IngestResponse,
-    responses={404: {"model": ErrorEnvelope}},
+    responses={404: {"model": ErrorEnvelope}, **INVALID_QUERY},
     tags=["documents"],
     summary="Replace an active document",
 )
@@ -192,7 +235,7 @@ async def replace_document(
 @router.delete(
     "/documents/{doc_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    responses={404: {"model": ErrorEnvelope}},
+    responses={404: {"model": ErrorEnvelope}, **INVALID_QUERY},
     tags=["documents"],
     summary="Delete a document",
 )
@@ -204,7 +247,13 @@ async def delete_document(doc_id: str, services: ServicesDep) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/documents", response_model=DocumentList, tags=["documents"], summary="List documents")
+@router.get(
+    "/documents",
+    response_model=DocumentList,
+    responses=INVALID_QUERY,
+    tags=["documents"],
+    summary="List documents",
+)
 async def list_documents(
     services: ServicesDep,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -224,11 +273,16 @@ async def list_documents(
 @router.get(
     "/documents/{doc_id}",
     response_model=DocumentDetail,
-    responses={404: {"model": ErrorEnvelope}},
+    responses={404: {"model": ErrorEnvelope}, **INVALID_QUERY},
     tags=["documents"],
     summary="Document metadata and section outline",
+    description=(
+        "One document's current version and its section outline, read from SQLite -- the "
+        "source of truth. Superseded versions are not listed; a deleted document is a 404."
+    ),
 )
 async def get_document(doc_id: str, services: ServicesDep) -> dict[str, Any]:
+    """`doc_id` defaults to a slug of the uploaded filename."""
     document = services.store.get_document(doc_id)
     if document is None or document["status"] != "active":
         raise DocumentNotFoundError(f"no active document with id {doc_id!r}")
@@ -261,7 +315,10 @@ async def get_document(doc_id: str, services: ServicesDep) -> dict[str, Any]:
     tags=["query"],
     summary="Answer a question from the corpus, or say the information is insufficient",
 )
-async def run_query(body: QueryRequest, services: ServicesDep) -> dict[str, Any]:
+async def run_query(
+    body: Annotated[QueryRequest, Body(openapi_examples=QUERY_EXAMPLES)],
+    services: ServicesDep,
+) -> dict[str, Any]:
     """Retrieve, gate, then answer -- or refuse. Always 200 when the service is healthy."""
     answer = await services.retrieval.answer(
         body.question,

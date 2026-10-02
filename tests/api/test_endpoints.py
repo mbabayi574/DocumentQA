@@ -674,6 +674,101 @@ def test_the_error_envelope_is_declared_in_the_schema(client: Any) -> None:
     assert set(components["ErrorEnvelope"]["required"]) == {"error"}
 
 
+def test_the_schema_never_advertises_an_error_shape_the_api_does_not_return(
+    client: Any,
+) -> None:
+    """The app has exactly one error shape, so the schema must not describe another.
+
+    Found by adding Swagger UI and reading what it advertised: four of the twelve declared
+    error responses referenced FastAPI's default ``HTTPValidationError``, while
+    `_install_validation_error` converts every one of them into ``VALIDATION_ERROR`` inside an
+    ``ErrorEnvelope``. So the documentation described a body the API never returns, on exactly
+    the endpoints where a caller most needs the contract to be right.
+
+    A schema is a promise. This is the test that keeps it one.
+    """
+    schema = client.get("/openapi.json").json()
+    # `/ready` is the one legitimate exception: a 503 there is a readiness payload, not an
+    # error, and a caller reads it rather than parsing it.
+    allowed = {"#/components/schemas/ErrorEnvelope", "#/components/schemas/ReadyResponse"}
+
+    offenders = [
+        (method.upper(), path, code)
+        for path, entry in schema["paths"].items()
+        for method, op in entry.items()
+        if method in {"get", "post", "put", "delete"}
+        for code, response in op.get("responses", {}).items()
+        if code.startswith(("4", "5"))
+        and response.get("content", {}).get("application/json", {}).get("schema", {}).get("$ref")
+        not in allowed
+    ]
+    assert not offenders, offenders
+    assert "HTTPValidationError" not in json.dumps(schema), (
+        "FastAPI's default validation-error shape is still referenced, so some endpoint is "
+        "documenting a body the API never returns"
+    )
+
+
+def test_every_documented_operation_can_be_called_from_swagger_ui(client: Any) -> None:
+    """Swagger UI is only usable if each operation is described and prefilled.
+
+    `/docs` was already served by the framework, so this is not about the page existing -- it is
+    about whether a caller can work out what to send. Every operation needs a summary and a
+    description, and every *JSON* body needs an example, because "Try it out" opens a textarea and
+    an empty one is a guaranteed 422 on the user's first click.
+
+    File uploads are exempt from the example rule and deliberately so: Swagger renders a file
+    picker, and a JSON example for a picker cannot be tried. Their text fields carry field-level
+    examples instead, which is what actually prefills the form.
+    """
+    schema = client.get("/openapi.json").json()
+    for path, entry in schema["paths"].items():
+        for method, op in entry.items():
+            if method not in {"get", "post", "put", "delete"}:
+                continue
+            where = f"{method.upper()} {path}"
+            assert op.get("summary"), f"{where} has no summary in Swagger UI"
+            assert op.get("description"), f"{where} has no description in Swagger UI"
+            for content_type, media in op.get("requestBody", {}).get("content", {}).items():
+                if content_type.startswith("multipart/"):
+                    continue
+                assert media.get("example") or media.get("examples"), (
+                    f"{where} has a JSON request body with no example, so 'Try it out' "
+                    "opens empty and the first click is a 422"
+                )
+
+
+def test_the_upload_field_is_described_so_swagger_renders_a_file_picker(client: Any) -> None:
+    """The upload field must be recognisable as a file, not a string.
+
+    Probed rather than assumed. FastAPI 0.142 + pydantic 2.13 describe `UploadFile` as
+    `{"type": "string", "contentMediaType": "application/octet-stream"}` -- the OpenAPI 3.2 /
+    JSON Schema 2020-12 spelling -- instead of the older `format: binary`. Whether Swagger UI
+    honours the newer spelling is third-party behaviour, so it was measured in the bundle
+    FastAPI pins: `swagger-ui-dist@5`'s `isFileUploadIntendedOAS32` returns true when
+    `contentMediaType` is a non-empty string, so a picker is rendered and no override is needed.
+
+    The check exists because the failure is silent and total: if a dependency upgrade changes
+    the spelling, Swagger falls back to a text box and a document cannot be uploaded from the
+    docs page at all, with nothing in the response to say why.
+    """
+    schema = client.get("/openapi.json").json()
+    body = schema["paths"]["/documents"]["post"]["requestBody"]["content"]["multipart/form-data"][
+        "schema"
+    ]
+    file_field = schema["components"]["schemas"][body["$ref"].rsplit("/", 1)[-1]]["properties"][
+        "file"
+    ]
+
+    as_30 = file_field.get("format") == "binary"
+    as_32 = isinstance(file_field.get("contentMediaType"), str) and file_field["contentMediaType"]
+    assert file_field.get("type") == "string"
+    assert as_30 or as_32, (
+        f"file field is described as {file_field}, which Swagger renders as a text box rather "
+        "than a picker, so a document cannot be uploaded from /docs"
+    )
+
+
 def test_the_schema_is_stable_across_runs(client: Any) -> None:
     """A snapshot of the paths and required fields, not of descriptions and prose."""
 

@@ -158,7 +158,7 @@ response shape that would otherwise silently mislabel every vector.
 | Document | Contains |
 |---|---|
 | [`plan.md`](plan.md) | Requirements, BGE-M3 capabilities, architecture, invariants, phases P6–P11, coding standards, Definition of Done |
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | D1–D65: every decision with its measurement or mutation evidence |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | D1–D72: every decision with its measurement or mutation evidence |
 | [`docs/eval_report.md`](docs/eval_report.md) | P9: 50-question metrics, the weight and chunk-size experiments, the calibration, and the five answers that cite the wrong source |
 
 ## Quick start
@@ -168,6 +168,7 @@ uv sync
 cp .env.example .env      # add EMBEDDING_API_KEY, EMBEDDING_MODEL=Bge-m3
 make check                # ruff + mypy + pytest, fully offline
 make run                  # uvicorn --workers 1  (a single worker is required)
+                           # then open http://127.0.0.1:8000/docs for Swagger UI
 
 # P9, against the real provider (needs EMBEDDING_API_KEY; writes its own data/eval index)
 make eval                 # metrics for hybrid vs dense-only vs lexical-only  -> tests/eval/report.md

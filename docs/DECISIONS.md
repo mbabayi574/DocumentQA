@@ -1939,3 +1939,81 @@ Both were thresholds documented as evidence and measuring nothing. §10 rule 18 
 with no caller "a bug waiting to be documented as a feature", and a threshold that cannot be set
 to any useful value is the same failure wearing a number. A file carrying either retired key still
 loads, so an existing deployment does not fail at startup over a key that no longer has a meaning.
+
+## D72 — Swagger UI was already there, and reading what it advertised found a lie in the contract
+
+Asked for Swagger UI "for using the endpoints". FastAPI serves `/docs`, `/redoc` and
+`/openapi.json` by default and `create_app` never disabled them, so the first measurement was of
+what already existed rather than of what to add:
+
+| check | result |
+|---|---|
+| `GET /docs` | 200, `text/html` — served by the framework, no new dependency |
+| `GET /redoc` | 200 |
+| `GET /openapi.json` | 200, 8 operations |
+| every operation has a `summary` | yes |
+| every operation has a `description` | **no** — `GET /documents/{doc_id}` |
+
+So the page existed and rung 1 of the ladder said the rest was optional. It was not, because
+Swagger UI's whole value is that it is the contract a caller reads instead of the source, and
+**the contract it was rendering was not true**:
+
+```
+POST   /documents            409  ErrorEnvelope        <- declared by hand
+GET    /documents            422  HTTPValidationError  <- FastAPI's default
+PUT    /documents/{doc_id}   422  HTTPValidationError
+DELETE /documents/{doc_id}   422  HTTPValidationError
+GET    /documents/{doc_id}   422  HTTPValidationError
+```
+
+The application has exactly one error shape: `_install_validation_error` converts every
+`RequestValidationError` into `VALIDATION_ERROR` inside an `ErrorEnvelope`. So four of the twelve
+declared error responses described a body this API never returns, and those four were precisely
+the parameter-validating endpoints — the ones where a caller is most likely to hit a 422 and most
+needs to read it. Two routes had hand-declared `422 → ErrorEnvelope`; the other four relied on
+FastAPI's automatic one, and that is the whole mechanism. A caller reading the docs for a 422 body
+would have written a parser against `{"detail": [...]}` and received
+`{"error": {"code", "message", "request_id"}}`. **The documentation was wrong in exactly the way
+that is most expensive to discover at runtime.**
+
+Fixed by declaring it once (`INVALID_QUERY`) rather than on each of the four routes, so the
+forgetting that produced the bug cannot recur silently:
+
+- `routes.py` — `INVALID_QUERY = {422: {"model": ErrorEnvelope}}` on all four; `GET /documents/{doc_id}`
+  gains the description it was the only operation missing.
+- `routes.py` — `QUERY_EXAMPLES` on the `/query` body parameter. **On the parameter, not the model:**
+  `json_schema_extra` on a pydantic model merges into `components.schemas`, where Swagger does not
+  read it; `Body(openapi_examples=...)` is what places examples beside the schema where the UI
+  reads them. Measured both ways — the model-level version left `POST /query` with no example and
+  the test caught it.
+- `schemas.py` — `doc_id` field example so the upload form is not half blank.
+- `tests/api/test_endpoints.py` — three tests, because a fix to a contract needs something to hold
+  it: the app never advertises an error shape it does not return (`HTTPValidationError` must be
+  unreferenced anywhere in the schema), every operation is described and every *JSON* body is
+  exemplified, and the upload field is described in a form Swagger renders as a picker.
+
+The upload check exists because that one is third-party behaviour, and §0 rule 4 says measure it.
+FastAPI 0.142 with pydantic 2.13 emits `{"type": "string", "contentMediaType":
+"application/octet-stream"}` for `UploadFile` — the OpenAPI 3.2 / JSON Schema 2020-12 spelling
+that replaces `format: binary`. Rather than guess whether Swagger UI honours it, the bundle
+FastAPI pins was read: `swagger-ui-dist@5` implements `isFileUploadIntendedOAS32` as *true when
+`contentMediaType` is a non-empty string*, so a picker **is** rendered. No override was added —
+"fixing" this would have downgraded a correct 3.2 declaration to an older spelling to fix
+something that was not broken. Had it been broken the failure would have been silent and total: a
+text box in place of a file picker, and no document uploadable from the docs page at all.
+
+### What this cost and what it did not
+
+No new dependency (`fastapi` already shipped the docs routes), no vendored assets, no build step —
+`swagger-ui-dist` is fetched from a CDN by the `/docs` page, so `/docs` needs network access on
+the browser side while the API itself stays offline. That is worth stating rather than hiding, and
+vendoring a 1.5 MB bundle into the repo to avoid it would be a worse trade.
+
+The multipart bodies are deliberately **exempt** from the example rule: Swagger renders a file
+picker for those, and a JSON example for a picker cannot be "tried". Their text fields carry
+field-level examples instead. The test says so, so the exemption is a recorded decision rather than
+an oversight someone will later "fix" by adding a useless example.
+
+This is also P11's consistency pass finding its first real defect by accident: the same
+docstring-versus-schema class of problem §11 lists, found by reading the schema as a user rather
+than by grepping the source.
