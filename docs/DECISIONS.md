@@ -2537,3 +2537,53 @@ Four have no `assert` and no `pytest.raises`:
 All four are must-not-raise tests with a sibling that proves the opposite case holds. Removing
 them would delete the only thing asserting their behaviour. Nothing else in the suite is
 redundant, and the two query-LRU tests that genuinely were have already gone in R1 (D73).
+
+## D83 — the production Containerfile, and what a build-context file is for (P11)
+
+**Context:** the project had no containerisation at all. `make run` is
+`uvicorn qasystem.api.app:create_app --factory --workers 1`, `data/` is git-ignored and
+single-owner, and the token comes from the environment — three facts that determine the image.
+**Decision:** `Containerfile` (multi-stage, `uv` builder → `python:3.13-slim`), plus
+`.dockerignore`.
+
+### The load-bearing lines, and the invariant behind each
+
+| line | why |
+|---|---|
+| `--workers 1` in the `CMD` | L2. A second worker does not scale the service, it takes the data-dir lock and fails at startup. It is in the `CMD` rather than left to the operator for exactly that reason |
+| `VOLUME ["/data"]`, created and chowned before `USER` | L8. The index is disposable, so a container must be replaceable without replacing the corpus. Creating `/data` as the app user means the volume inherits the ownership instead of the first boot failing to open its own database |
+| `.dockerignore` excludes `.env` | I8. Without it, `docker build` ships the token to the daemon and bakes it into a layer. This is the one line in the file that is a security control rather than tidiness |
+| `COPY config/ /app/config/` | **The bug this prevents.** `uv_build` does not package `thresholds.json`, and a missing thresholds file does not crash — `load_thresholds` falls back to uncalibrated defaults (D42). An image without this line comes up **healthy and refuses far more questions than it should**, which is the worst failure mode available: no error, worse answers |
+| `HEALTHCHECK` on `/ready`, not `/health` | `/ready` is 503 while the model, the lock or the collection is unavailable and 200 when the service can actually answer. `/health` is always 200 by design, so probing it would report a service that cannot answer as healthy |
+| `uv sync --locked` | fails rather than silently re-resolving, so the image cannot drift from the committed `uv.lock` |
+| stdlib `urllib` in the healthcheck | slim has no curl, and adding a package for a healthcheck is a dependency nobody asked for (§10 rule 5) |
+
+### What was verified, and what could not be
+
+**No container runtime is available on this machine**, so the image has not been built or run.
+Rather than assert it works from reading it, the install and run steps were reproduced by hand in
+a directory laid out exactly as the image would be — `.venv` + `src/` + `config/`, nothing else,
+copied from a clean `uv sync --locked --no-dev`:
+
+- both `uv sync` layers succeed, and `pytest`/`mypy`/`ruff` are **absent** from the venv, so
+  `--no-dev` is doing what the image assumes;
+- `schema.sql` resolves through `importlib.resources` from the installed package, so the
+  containerised app can create its schema;
+- `thresholds.json` is confirmed **not** packaged, which is why the `config/` copy above is
+  load-bearing rather than redundant;
+- the app started from that venv with the image's environment reported
+  `thresholds_calibrated: true`, `model_id: Bge-m3`, `dimension: 1024`, `lock_held: true`;
+- the `HEALTHCHECK` command, run verbatim, exits 0; and a real upload → query answered with a
+  citation through that same venv.
+
+**This caught a build that would have failed.** `.dockerignore` originally excluded `README.md`,
+but `pyproject.toml` declares `readme = "README.md"`, so the backend opens it and `uv sync` dies
+with `failed to open file .../README.md`. Reading the file would not have found that; running the
+steps did. It is the fourth time in this project that *executing* the instruction found what
+reading it could not (D79, D81, D84).
+
+**Still unverified:** layer caching behaviour, the non-root user's ability to write a *bind*
+mounted host directory (a named volume inherits the ownership set above; a host bind mount does
+not, and would need matching host-side ownership), and the image's size — `chromadb` pulls in
+`onnxruntime` and `kubernetes`, so this is a large image and that is a known cost rather than a
+surprise.

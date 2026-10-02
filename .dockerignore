@@ -1,0 +1,42 @@
+# Build-context exclusions.
+#
+# The important one is `.env`: without it, `docker build` would send the API token to the
+# daemon and bake it into a layer, which is the one thing invariant I8 exists to prevent
+# (docs/DECISIONS.md D23, D73). This file is a security control, not tidiness.
+
+# Secrets and runtime state
+.env
+.env.*
+!.env.example
+data/
+
+# Local environment and caches
+.venv/
+.git/
+.gitignore
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+**/__pycache__/
+**/*.py[cod]
+
+# The image installs from pyproject.toml/uv.lock, src/ and config/. Copying the whole tree would
+# add ~800 KB of test fixtures — including the 749 KB Persian book — for nothing.
+#
+# README.md is deliberately NOT excluded, despite being documentation: pyproject.toml declares
+# `readme = "README.md"`, so the build backend opens it and `uv sync` fails without it. Found by
+# running the container's own install steps locally rather than trusting this file to be right.
+tests/
+docs/
+scripts/
+plan.md
+AGENTS.md
+refactor-plan.md
+Makefile
+
+# The image is not a build toolchain: no dev group, no test runner.
+.dockerignore
+Containerfile
