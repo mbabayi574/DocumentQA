@@ -30,6 +30,19 @@ class ConfigError(QASystemError):
     http_status = 500
 
 
+class ValidationError(QASystemError):
+    """A request failed validation before any domain work started.
+
+    It gets a class like every other code, even though nothing raises it: FastAPI's
+    ``RequestValidationError`` is converted to this shape at the API boundary, so without a
+    class here the code had no home and could not appear in the OpenAPI contract alongside the
+    other 14 (D78). ``plan.md`` §5.3 lists this one in its table now.
+    """
+
+    code = "VALIDATION_ERROR"
+    http_status = 422
+
+
 class UnsupportedFormatError(QASystemError):
     """Document format is not one of PDF, TXT, Markdown."""
 

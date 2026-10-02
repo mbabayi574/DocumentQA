@@ -32,7 +32,7 @@ from qasystem import __version__
 from qasystem.api.deps import Services, build_services
 from qasystem.api.routes import router
 from qasystem.config import Settings, get_settings
-from qasystem.errors import QASystemError
+from qasystem.errors import QASystemError, ValidationError
 from qasystem.logging_setup import configure_logging, scrub, secrets_of
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
         return JSONResponse(
             status_code=422,
             content=_envelope(
-                "VALIDATION_ERROR",
+                ValidationError.code,
                 _summarise_validation(exc),
                 request.state.request_id,
             ),
@@ -114,7 +114,7 @@ def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
         )
         return JSONResponse(
             status_code=500,
-            content=_envelope("INTERNAL_ERROR", "internal error", request.state.request_id),
+            content=_envelope(QASystemError.code, "internal error", request.state.request_id),
         )
 
 

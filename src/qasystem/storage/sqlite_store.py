@@ -2,6 +2,10 @@
 
 One connection, short-lived transactions, one obvious boundary per method. The store
 owns every write: a caller cannot reach a cursor and leave a half-applied change behind.
+The one deliberate exception is ``execute_script``, which hands out raw SQL for migrations
+and for tests that need to inject a state the API refuses to build (a corrupt thresholds
+file, an orphaned FTS row). It is labelled as such, and the boundary it weakens is the
+test suite's own.
 
 Two rules the code exists to enforce:
 

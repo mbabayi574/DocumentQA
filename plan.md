@@ -282,6 +282,11 @@ is a normal `200`.
 | `ConfigError` | `CONFIG_ERROR` | 500 |
 | anything else | `INTERNAL_ERROR` | 500, no stack trace, no secrets |
 
+`INVALID_QUESTION` (empty or whitespace-only question) is raised as a typed error with 422, and
+`VALIDATION_ERROR` is FastAPI's own request validation converted into the same envelope at the
+API boundary — so both are listed in `ErrorBody.code`'s OpenAPI description alongside the other
+14 codes, derived from `qasystem.errors` rather than written twice (D78).
+
 ### 5.4 Data model
 
 `src/qasystem/storage/schema.sql` is the source of truth: idempotent, `PRAGMA user_version`
@@ -344,7 +349,7 @@ GATE min_dense=0.54  min_coverage=0.40  min_coverage_high=0.75  min_sentence_ove
 ├── README.md  plan.md  AGENTS.md  Makefile  pyproject.toml  .env.example  .gitignore
 ├── config/thresholds.json            # written by `make calibrate`, committed
 ├── docs/ DECISIONS.md  eval_report.md
-├── scripts/ smoke_test.sh  eval.sh  measure_provider.py  build_pdf_fixtures.py
+├── scripts/ smoke_test.sh  measure_provider.py  build_pdf_fixtures.py  build_eval_corpus.py
 ├── src/qasystem/
 │   ├── config.py  errors.py  logging_setup.py  cli.py
 │   ├── domain/     models.py  ports.py

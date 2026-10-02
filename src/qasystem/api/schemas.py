@@ -15,16 +15,41 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from qasystem import errors
+
 Status = Literal["answered", "insufficient_information"]
 Reason = Literal["empty_knowledge_base", "no_relevant_content", "below_threshold"]
+
+#: Every code the app can return, read off the error classes rather than written out twice.
+#: `code` is the one field a caller branches on, and D72's follow-up found 12 of the 14
+#: absent from the OpenAPI document entirely -- a client could parse the envelope and still
+#: not know what to branch on. Derived here so the contract cannot drift from the code (D78).
+_ERROR_CODES: tuple[str, ...] = tuple(
+    sorted(
+        {
+            obj.code
+            for obj in vars(errors).values()
+            if isinstance(obj, type) and issubclass(obj, errors.QASystemError)
+        }
+    )
+)
 
 
 class ErrorBody(BaseModel):
     """One error, three fields, for every failure the API can produce."""
 
-    code: str
-    message: str
-    request_id: str
+    code: str = Field(
+        description=(
+            "Stable machine-readable code, one of: " + ", ".join(_ERROR_CODES) + ". "
+            "The set is derived from `qasystem.errors` at import time, so it cannot drift."
+        )
+    )
+    message: str = Field(
+        description="Human-readable detail. Never contains a secret or a stack trace."
+    )
+    request_id: str = Field(
+        description="Matches the `X-Request-ID` response header and the access log."
+    )
 
 
 class ErrorEnvelope(BaseModel):

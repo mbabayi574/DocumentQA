@@ -2316,3 +2316,46 @@ still pass, because the null makes the version check fail on its own. Fixing tha
 against the state the guard alone defends — a `deleted` document whose `current_version` is
 still set — which is P10's "a regression test for every bug found along the way" work rather
 than something this grouping claims to have closed.
+
+## D78 — every error code the app can return is now named in the OpenAPI contract (P11)
+
+**Context:** R9's consistency pass asks that "every `code` in `errors.py` appears in the OpenAPI
+schema or is documented as internal". Checked, it did not: `ErrorBody.code` was an unconstrained
+`str`, so the schema described the field and said nothing about its values. **12 of the 13 domain
+codes appeared nowhere in the OpenAPI document**, and only `INTERNAL_ERROR` was visible — because
+`app.py` hardcoded it in a 500 declaration. A client generated from this schema could parse the
+envelope and still have nothing to branch on.
+**Decision:** `ErrorBody.code` now carries a description listing every code, **derived from the
+error classes at import time** rather than written out a second time.
+**Evidence:** the test was written first and failed naming all 14 codes as absent. After the fix
+the rendered description reads `one of: CONFIG_ERROR, DOCUMENT_EXISTS, DOCUMENT_NOT_FOUND,
+EMBEDDING_AUTH, EMBEDDING_UNAVAILABLE, EMPTY_DOCUMENT, FILE_TOO_LARGE, INTERNAL_ERROR,
+INVALID_QUESTION, NO_TEXT_LAYER, PARSE_ERROR, STORAGE_LOCKED, UNSUPPORTED_FORMAT,
+VALIDATION_ERROR, VECTOR_STORE_UNAVAILABLE`, and
+`tests/api/test_endpoints.py::test_every_error_code_the_app_can_return_is_named_in_the_schema`
+keeps it true. Because the list is derived, the test's job is not to re-derive it but to assert
+the derivation produced something — `len(declared) >= 13` is what stops an empty introspection
+from quietly publishing an empty contract.
+
+### `VALIDATION_ERROR` had no home, and that was the real defect
+
+The derivation immediately exposed a code the app returns with no class behind it:
+`VALIDATION_ERROR`. `app.py` produced it from FastAPI's `RequestValidationError` at the boundary,
+so it existed in the contract but not in `errors.py`, and therefore could not appear in a list
+derived from `errors.py`. D72 had already noticed this code and worked around it by hand.
+
+The fix is a class, like every other: `errors.ValidationError`, `code = "VALIDATION_ERROR"`,
+`http_status = 422`, used by `app.py` instead of the literal. `app.py` also stops hardcoding
+`INTERNAL_ERROR` in favour of `QASystemError.code`. `plan.md` §5.3's table now lists it. A code
+that is returned but not declared is a code nobody maintains — it is the same class of problem as
+a stale path in a docstring, and the same fix: put it where the thing it describes can reach it.
+
+### The rest of R9, checked and found clean
+
+| check | result |
+|---|---|
+| every `Settings` field has a reader in `src` | 28/28. `app_env` and `embedding_provider` read inside `config.py`'s own validator |
+| magic numbers inline (§10 rule 13) | none. Every float outside `config.py` is arithmetic (`0.0`/`1.0`/`0.5`), a `§7.4` docstring cross-reference, a measured value in a comment, or `CHARS_PER_TOKEN`/`_TERMINATORS` — named constants with a measured rationale beside them |
+| one-line module docstring stating role and layer | 42/42 modules have one; none is missing |
+| `plan.md` §7's layout matches `git ls-files` | one line was wrong: `scripts/eval.sh`, which never existed. Removed, and `build_eval_corpus.py` added, since it exists and §7 did not list it |
+| `sqlite_store.py`'s docstring vs `execute_script` | the docstring claimed "a caller cannot reach a cursor" while `execute_script` hands one out. Now names the exception, says what it is for (migrations, and tests that must inject a state the API refuses to build), and says which boundary it weakens |

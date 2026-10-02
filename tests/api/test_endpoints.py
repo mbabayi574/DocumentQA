@@ -675,6 +675,35 @@ def test_the_error_envelope_is_declared_in_the_schema(client: Any) -> None:
     assert set(components["ErrorEnvelope"]["required"]) == {"error"}
 
 
+def test_every_error_code_the_app_can_return_is_named_in_the_schema(client: Any) -> None:
+    """The `code` field is the one part of the error contract a caller branches on.
+
+    D72 fixed the error *shape* appearing nowhere useful; this is the follow-up the same
+    reading found. `ErrorBody.code` was an unconstrained `str`, so the schema described the
+    field and said nothing about its values: 12 of the 13 domain codes were absent from the
+    OpenAPI document entirely, and only `INTERNAL_ERROR` appeared because `app.py` hardcodes
+    it in a 500 declaration. A client generated from this schema could parse the envelope and
+    still have no idea what to branch on.
+
+    The list is derived from the error classes at import time, so it cannot drift -- and this
+    test asserts the derivation actually produced something, which is what stops an empty
+    introspection from quietly publishing an empty contract.
+    """
+    from qasystem import errors
+
+    declared = {
+        obj.code
+        for obj in vars(errors).values()
+        if isinstance(obj, type) and issubclass(obj, errors.QASystemError)
+    }
+    assert len(declared) >= 13, f"introspection found only {len(declared)} codes"
+
+    described = client.get("/openapi.json").json()["components"]["schemas"]["ErrorBody"]
+    rendered = json.dumps(described)
+    undocumented = sorted(code for code in declared if code not in rendered)
+    assert not undocumented, f"error codes absent from the OpenAPI schema: {undocumented}"
+
+
 def test_the_schema_never_advertises_an_error_shape_the_api_does_not_return(
     client: Any,
 ) -> None:
