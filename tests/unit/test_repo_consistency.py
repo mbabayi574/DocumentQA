@@ -13,6 +13,7 @@ failure mode worth catching.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,6 +22,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCS = ROOT / "tests" / "fixtures" / "docs"
+
+# The prose a reviewer reads before any code. A broken link here is the first thing
+# they hit, and it is invisible to every test that only looks at behaviour.
+DOC_FILES = (ROOT / "README.md", ROOT / "plan.md", ROOT / "docs" / "DECISIONS.md")
 
 # Read unconditionally by the suite, so each one must be in the repository.
 REQUIRED = (
@@ -103,6 +108,27 @@ def test_no_runtime_artifact_is_tracked() -> None:
         f"runtime lock files are tracked: {offenders}. `uv.lock` is the dependency lockfile "
         "and is the only one that belongs in source control."
     )
+
+
+@needs_git
+def test_every_relative_markdown_link_resolves() -> None:
+    """A link to a file that does not exist is a lie a reviewer pays for.
+
+    D31's failure class, second instance: `docs/eval_report.md` was linked from
+    `README.md` three times, named in `plan.md` §7/§9/§11, and `docs/DECISIONS.md`
+    contradicted itself about where the report lives -- while `plan.md` §11 carried a
+    *ticked* Definition-of-Done box for it. Nothing checked it, because the existing
+    test only looks at fixtures.
+    """
+    broken: list[str] = []
+    for source in DOC_FILES:
+        for target in re.findall(r"\]\(([^)]+)\)", source.read_text(encoding="utf-8")):
+            if target.startswith(("http://", "https://", "#", "mailto:")):
+                continue
+            path = target.partition("#")[0]
+            if path and not (source.parent / path).exists():
+                broken.append(f"{source.relative_to(ROOT)} -> {target}")
+    assert not broken, f"relative markdown links that do not resolve: {broken}"
 
 
 def test_every_required_fixture_is_present() -> None:

@@ -36,6 +36,10 @@ EXIT_FAILED = 1
 #: a maintenance command works regardless of where `data/` happens to be.
 EVAL_DIR = Path(__file__).resolve().parents[2] / "tests" / "eval"
 DATASET = EVAL_DIR / "dataset.jsonl"
+#: The written report is a *deliverable*, not harness input, so it does not live beside the
+#: dataset. It was welded to EVAL_DIR until P11, which put it in tests/ while plan.md §7, §9
+#: and §11's ticked DoD box all said docs/eval_report.md (D74).
+REPORT_PATH = Path(__file__).resolve().parents[2] / "docs" / "eval_report.md"
 
 
 def _report(payload: dict[str, Any]) -> None:
@@ -176,7 +180,7 @@ def _run_eval(settings: Settings, *, calibrate: bool) -> int:
         _report({"error": type(exc).__name__, "message": str(exc), "expected": str(EVAL_DIR)})
         return EXIT_FAILED
 
-    report = EVAL_DIR / "report.md"
+    report = REPORT_PATH
     outcome = asyncio.run(runner.run(settings, calibrate=calibrate, report=report))
     _report(
         {

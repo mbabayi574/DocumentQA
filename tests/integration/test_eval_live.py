@@ -98,7 +98,7 @@ def test_the_shipped_thresholds_still_refuse_another_models_measurements() -> No
 def test_the_committed_report_quotes_the_committed_thresholds() -> None:
     """The report and the file are two halves of one claim; if they drift, one is a lie."""
     payload = json.loads(SHIPPED.read_text(encoding="utf-8"))
-    report = (ROOT / "tests" / "eval" / "report.md").read_text(encoding="utf-8")
+    report = (ROOT / "docs" / "eval_report.md").read_text(encoding="utf-8")
     # Read the bars from the gate's own contract rather than repeating them: a list here is a
     # second place for the two to drift, and this test exists to catch drift.
     from qasystem.retrieval.gate import THRESHOLD_FIELDS

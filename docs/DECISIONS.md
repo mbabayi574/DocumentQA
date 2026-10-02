@@ -2066,3 +2066,43 @@ defined `_secrets_of(settings)` — two copies of the same three lines, which is
 of pair that drifts and leaks the token on the side that loses the race. `_secrets_of` is now
 `logging_setup.secrets_of`, public, one definition, imported by `api/app.py`. I8 is a release
 blocker and it is enforced by two callers of one function instead of two copies of a function.
+
+## D74 — `docs/eval_report.md` is made real rather than repointed (P11)
+
+**Context:** P11's audit found that `docs/eval_report.md` does not exist. It is named in
+`plan.md` §7's repository layout, in §9's P9 gate, and in §11's Definition of Done — where
+its box is **ticked** — and `README.md` linked to it three times. `docs/DECISIONS.md` D215
+and D1654 also said `docs/eval_report.md` while D1442 said `tests/eval/report.md`, so the
+project contradicted itself. The artifact that existed was `tests/eval/report.md`.
+**Decision:** move the report to `docs/eval_report.md` and make the code write there.
+**Evidence:** the cause was one line. `cli.py` welded the report to `EVAL_DIR` — the *eval
+harness's* location — but the report is a **deliverable**, not harness input: the harness is
+`dataset.jsonl` plus `runner.py`, and `runner.py` needs `EVAL_DIR` on `sys.path` for its own
+import, which is a reason that has nothing to do with where the report belongs. The two are
+now `EVAL_DIR` (inputs) and `REPORT_PATH` (output), which is why they drifted. `AGENTS.md`
+makes `plan.md` the source of truth, and three of its statements agree with each other, so the
+documentation was right and the code had drifted.
+
+### The alternative, and why it was rejected
+
+Repointing four documentation references at `tests/eval/report.md` is one line cheaper. It was
+rejected because it makes §11's ticked box *false* — turning a documentation bug into a false
+Definition-of-Done claim — and because it parks a generated deliverable inside the test tree,
+where a reviewer looking for `docs/` will not find it. One line of code is the smaller truth.
+
+### The guard, because this is D31 twice
+
+`test_repo_consistency.py::test_every_relative_markdown_link_resolves` now walks every relative
+markdown link target in `README.md`, `plan.md` and `docs/DECISIONS.md` and fails on any that
+does not exist. It was written first and failed with exactly the three broken README links,
+which is the only evidence that it would have caught them. The existing test explicitly
+disclaimed checking path references ("which would be brittle"); this one is not brittle,
+because it checks the links that exist rather than trying to parse the suite for the paths it
+mentions.
+
+It also failed on itself, once, before this entry was finished: the first draft of this
+paragraph spelled the link pattern out literally in prose, and the guard read that prose as a
+link to a file named `…`. That is the correct failure direction — a stricter check than
+intended, not a weaker one — so the prose was reworded rather than the check loosened. Worth
+recording because the tempting fix is a skip-list for "targets that do not look like paths",
+which would have hidden the three real failures along with the false one.

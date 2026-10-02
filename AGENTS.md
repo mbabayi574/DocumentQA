@@ -69,11 +69,9 @@ when you touch the HTTP layer. Offline suite is 640 collected (598 pass / 42 ski
 
 ## Known-stale claims (verified, do not "fix" the code to match)
 
-- **`docs/eval_report.md` does not exist.** The artifact is `tests/eval/report.md`, written by
-  `cli.py:179`. README links to the missing path 3 times and `plan.md` §11 ticks a DoD box for
-  it. `refactor-plan.md` R3 resolves this by making the documented path real.
 - `plan.md` §7's layout lists `scripts/eval.sh`, which never existed.
-- `.qasystem.lock` (0 bytes) is tracked in git; `.gitignore` only covers `/data/`.
+- `docs/DECISIONS.md` contradicts itself about the eval report's path (D215/D1654 vs D1442).
+  D74 settles it: the report is `docs/eval_report.md`, and a test now fails if a link breaks.
 - Cross-lingual retrieval is **not** supported — D71 removed the branch that carried it. The
   README must say so; do not reintroduce an English-query-against-Persian-doc claim.
 

@@ -171,7 +171,7 @@ make run                  # uvicorn --workers 1  (a single worker is required)
                            # then open http://127.0.0.1:8000/docs for Swagger UI
 
 # P9, against the real provider (needs EMBEDDING_API_KEY; writes its own data/eval index)
-make eval                 # metrics for hybrid vs dense-only vs lexical-only  -> tests/eval/report.md
+make eval                 # metrics for hybrid vs dense-only vs lexical-only  -> docs/eval_report.md
 make calibrate            # the same, plus grid-searched thresholds -> config/thresholds.json
 make live                 # the test suite against the real provider
 ```
