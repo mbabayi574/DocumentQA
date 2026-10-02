@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 import pytest
 
@@ -19,7 +19,7 @@ class CountingCache:
         self.misses = 0
         self.writes = 0
 
-    def get_many(self, model_id: str, input_hashes: Sequence[str]) -> dict[str, list[float]]:
+    def get_embeddings(self, model_id: str, input_hashes: Sequence[str]) -> dict[str, list[float]]:
         found = {}
         for digest in input_hashes:
             row = self.rows.get((model_id, digest))
@@ -30,9 +30,9 @@ class CountingCache:
                 found[digest] = row
         return found
 
-    def put_many(self, model_id: str, rows: dict[str, list[float]]) -> None:
+    def put_embeddings(self, model_id: str, rows: Iterable[tuple[str, Sequence[float]]]) -> None:
         self.writes += 1
-        for digest, vector in rows.items():
+        for digest, vector in rows:
             self.rows[(model_id, digest)] = vector
 
 
@@ -108,7 +108,9 @@ async def test_a_cache_repository_failure_does_not_lose_the_vectors() -> None:
     """The cache is an optimisation: a write fault must not fail the ingest."""
 
     class BrokenCache(CountingCache):
-        def put_many(self, model_id: str, rows: dict[str, list[float]]) -> None:
+        def put_embeddings(
+            self, model_id: str, rows: Iterable[tuple[str, Sequence[float]]]
+        ) -> None:
             raise RuntimeError("disk full")
 
     inner = FakeEmbedder(dimension=8)

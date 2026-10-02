@@ -33,7 +33,6 @@ from qasystem.parsing.registry import ParserRegistry
 from qasystem.retrieval.gate import Thresholds, load_thresholds
 from qasystem.retrieval.service import RetrievalService
 from qasystem.storage.chroma_store import ChromaStore
-from qasystem.storage.embedding_cache import SqliteEmbeddingCache
 from qasystem.storage.sqlite_store import SqliteStore
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "docs"
@@ -82,7 +81,7 @@ async def live_env(tmp_path: Path) -> dict[str, object]:
         vectors = ChromaStore(
             tmp_path / "chroma", model_id=client.model_id, dimension=client.dimension
         )
-        embedder = CachingEmbedder(client, SqliteEmbeddingCache(store))
+        embedder = CachingEmbedder(client, store)
         yield {
             "settings": settings,
             "store": store,

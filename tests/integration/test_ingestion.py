@@ -136,7 +136,7 @@ def env(tmp_path: Any, settings_factory: Any) -> Any:
     inner = ChromaStore(tmp_path / "chroma", model_id="fake-embedder", dimension=DIM)
     vectors = FlakyVectors(inner)
     fake = FakeEmbedder(dimension=DIM, model_id="fake-embedder")
-    embedder = CachingEmbedder(fake, _Cache(store))
+    embedder = CachingEmbedder(fake, store)
 
     class Env:
         def __init__(self) -> None:
@@ -174,19 +174,6 @@ def env(tmp_path: Any, settings_factory: Any) -> Any:
 
     store.close()
     inner.close()
-
-
-class _Cache:
-    """``EmbeddingCache`` over the store, so I5 and I10 use the real table."""
-
-    def __init__(self, store: SqliteStore) -> None:
-        self._store = store
-
-    def get_many(self, model_id: str, input_hashes: Sequence[str]) -> dict[str, list[float]]:
-        return self._store.get_embeddings(model_id, input_hashes)
-
-    def put_many(self, model_id: str, rows: Any) -> None:
-        self._store.put_embeddings(model_id, rows.items())
 
 
 # ---------------------------------------------------------------- test 1
@@ -336,7 +323,7 @@ async def test_7_embedder_failure_mid_update_leaves_the_old_version_queryable(en
     service = IngestionService(
         store=env.store,
         vectors=env.vectors,  # type: ignore[arg-type]
-        embedder=CachingEmbedder(exploding, _Cache(env.store)),
+        embedder=CachingEmbedder(exploding, env.store),
         parser=ParserRegistry(),
         chunker=Chunker(env.settings),
     )
@@ -355,7 +342,7 @@ async def test_7b_a_failed_version_is_marked_and_leaves_no_rows(env: Any) -> Non
     service = IngestionService(
         store=env.store,
         vectors=env.vectors,  # type: ignore[arg-type]
-        embedder=CachingEmbedder(exploding, _Cache(env.store)),
+        embedder=CachingEmbedder(exploding, env.store),
         parser=ParserRegistry(),
         chunker=Chunker(env.settings),
     )
@@ -586,7 +573,7 @@ async def test_a_failed_ingest_is_logged_with_its_error_code(env: Any) -> None:
     service = IngestionService(
         store=env.store,
         vectors=env.vectors,  # type: ignore[arg-type]
-        embedder=CachingEmbedder(exploding, _Cache(env.store)),
+        embedder=CachingEmbedder(exploding, env.store),
         parser=ParserRegistry(),
         chunker=Chunker(env.settings),
     )

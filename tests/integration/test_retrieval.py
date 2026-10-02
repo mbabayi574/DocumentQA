@@ -25,7 +25,6 @@ from qasystem.parsing.registry import ParserRegistry
 from qasystem.retrieval.gate import Thresholds
 from qasystem.retrieval.service import RetrievalService
 from qasystem.storage.chroma_store import ChromaStore
-from qasystem.storage.embedding_cache import SqliteEmbeddingCache
 from qasystem.storage.sqlite_store import SqliteStore
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "docs"
@@ -140,7 +139,7 @@ def env(tmp_path: Any, settings_factory: Any) -> Any:
     store = SqliteStore(tmp_path / "qasystem.db")
     inner = ChromaStore(tmp_path / "chroma", model_id=FAKE_MODEL, dimension=DIM)
     fake = FakeEmbedder(dimension=DIM, model_id=FAKE_MODEL)
-    embedder = CachingEmbedder(fake, SqliteEmbeddingCache(store))
+    embedder = CachingEmbedder(fake, store)
 
     class Env:
         def __init__(self) -> None:

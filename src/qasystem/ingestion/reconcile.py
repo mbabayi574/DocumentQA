@@ -12,24 +12,14 @@ decide the answer. P6 decides what to do with a plan; this module only produces 
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from qasystem.domain.models import VectorItem
-from qasystem.domain.ports import VectorStore
+from qasystem.domain.ports import Embedder, VectorStore
 from qasystem.storage.chroma_store import PAGE_SIZE
 from qasystem.storage.sqlite_store import SqliteStore
-
-
-class EmbedderRef(Protocol):
-    """Accepted by ``rebuild`` purely so a test can pass a tripwire and prove the
-    zero-API-call guarantee (I10) instead of taking it on trust."""
-
-    model_id: str
-    dimension: int
-
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
 @dataclass(frozen=True)
@@ -61,7 +51,7 @@ def rebuild(
     vectors: VectorStore,
     model_id: str,
     *,
-    embedder: EmbedderRef | None = None,
+    embedder: Embedder | None = None,
 ) -> int:
     """Re-upsert every chunk's vector from ``embedding_cache``. Returns rows restored.
 

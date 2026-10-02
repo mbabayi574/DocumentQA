@@ -2106,3 +2106,47 @@ link to a file named `…`. That is the correct failure direction — a stricter
 intended, not a weaker one — so the prose was reworded rather than the check loosened. Worth
 recording because the tempting fix is a skip-list for "targets that do not look like paths",
 which would have hidden the three real failures along with the false one.
+
+## D75 — the embedding-cache adapter is deleted; the store *is* the cache (P11)
+
+**Context:** `storage/embedding_cache.py` was a 27-line class whose body delegated to
+`SqliteStore.get_embeddings` / `put_embeddings`, and `tests/integration/test_ingestion.py`
+carried its own twelve-line copy of the same two methods — a class named `_Cache`, inside the
+file whose docstring claimed "so I5 and I10 use the real table". It did use the real table,
+through a duplicate of the production adapter rather than the adapter itself.
+**Decision:** delete both. `SqliteStore` now satisfies the `EmbeddingCache` port structurally.
+**Evidence:** the duplication was not merely redundant, it was a divergence hazard in the exact
+place the release blockers are proven — if the adapter and the store ever disagreed about the
+key or the model, `test_10_rebuild_restores_dense_search_with_zero_embed_calls` would still
+have passed, because it was not exercising the adapter production uses. `CachingEmbedder` now
+receives the store in `deps.py`, so I5 and I10 hold through the one real implementation.
+
+### The rename had a subtlety the plan did not anticipate
+
+`refactor-plan.md` R4 predicted renaming the port's two methods to the store's names was a
+three-line change. It nearly was not, and the reason is worth recording. The port declared
+`put_many(model_id, rows: Mapping[str, Sequence[float]])` while the store declares
+`put_embeddings(model_id, rows: Iterable[tuple[str, Sequence[float]]])`. Those are **not** the
+same type: iterating a `Mapping` yields its *keys*, not `(key, value)` pairs. The adapter's
+third line, `rows.items()`, was not boilerplate — it was the conversion that made the two
+signatures agree.
+
+So the port was changed to take pairs, and `CachingEmbedder` now passes `zip(...)` directly
+instead of building a dict and having the adapter take it apart again. That removes the
+mismatch *and* an intermediate dict, so the lazy version was also the smaller one. The
+alternative — changing `SqliteStore.put_embeddings` to accept a `Mapping` — would have touched
+sixteen call sites in `tests/unit/test_store_sqlite.py` plus `reconcile.py:76`.
+
+### Two ports, one implementation each
+
+`reconcile.EmbedderRef` is also gone. It declared `model_id`, `dimension` and `embed()` — the
+three members `domain.ports.Embedder` already declares — and existed only so a test could
+hand `rebuild` a tripwire. `rebuild` now takes the real `Embedder` port, and the tripwire
+satisfies it structurally. This costs the tripwire a `requests` property, because the real
+port has one and the shadow did not. That is the honest price: typing an argument against the
+actual contract instead of against a one-method imitation of it.
+
+The `EmbeddingCache` port **stays**. After this change it has the store plus the in-memory
+fakes in `test_embed_caching.py` — two real implementations, which is what §10 rule 16 asks
+for. The fake is not decoration: `test_a_cache_repository_failure_does_not_lose_the_vectors`
+needs a cache that raises, and no real store will.

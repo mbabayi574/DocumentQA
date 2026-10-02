@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Protocol
 
 from qasystem.domain.ports import Embedder
@@ -28,11 +28,20 @@ def input_hash(text: str) -> str:
 
 
 class EmbeddingCache(Protocol):
-    """Persistent vector store keyed by ``(input_hash, model_id)``; P5 implements it in SQLite."""
+    """Persistent vector store keyed by ``(input_hash, model_id)``.
 
-    def get_many(self, model_id: str, input_hashes: Sequence[str]) -> dict[str, list[float]]: ...
+    Named after ``SqliteStore``'s own methods and shaped like them, so the store satisfies
+    this structurally and no adapter class stands between them (D75). The in-memory fakes
+    in the tests are the second implementation that earns the port its existence (§10r16).
+    """
 
-    def put_many(self, model_id: str, rows: Mapping[str, Sequence[float]]) -> None: ...
+    def get_embeddings(
+        self, model_id: str, input_hashes: Sequence[str]
+    ) -> dict[str, list[float]]: ...
+
+    def put_embeddings(
+        self, model_id: str, rows: Iterable[tuple[str, Sequence[float]]]
+    ) -> None: ...
 
 
 class CachingEmbedder:
@@ -73,7 +82,7 @@ class CachingEmbedder:
         if missing:
             by_hash = dict(zip(unique, dict.fromkeys(texts), strict=True))
             fresh = await self._embed([by_hash[digest] for digest in missing])
-            self._put(self.model_id, dict(zip(missing, fresh, strict=True)))
+            self._put(self.model_id, list(zip(missing, fresh, strict=True)))
             found.update(zip(missing, fresh, strict=True))
         return [found[digest] for digest in hashes]
 
@@ -82,15 +91,15 @@ class CachingEmbedder:
 
     def _get(self, model_id: str, hashes: Sequence[str]) -> dict[str, list[float]]:
         try:
-            return self._cache.get_many(model_id, hashes)
+            return self._cache.get_embeddings(model_id, hashes)
         except Exception as exc:
             logger.warning(
                 "embedding cache read failed (%s); embedding everything", type(exc).__name__
             )
             return {}
 
-    def _put(self, model_id: str, rows: Mapping[str, Sequence[float]]) -> None:
+    def _put(self, model_id: str, rows: Iterable[tuple[str, Sequence[float]]]) -> None:
         try:
-            self._cache.put_many(model_id, rows)
+            self._cache.put_embeddings(model_id, rows)
         except Exception as exc:
             logger.warning("embedding cache write failed (%s); continuing", type(exc).__name__)

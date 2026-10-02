@@ -25,7 +25,7 @@ from pathlib import Path
 from qasystem.chunking.chunker import Chunker
 from qasystem.config import Settings
 from qasystem.domain.ports import Embedder, VectorStore
-from qasystem.embeddings.caching import CachingEmbedder
+from qasystem.embeddings.caching import CachingEmbedder, EmbeddingCache
 from qasystem.embeddings.client import EmbeddingClient
 from qasystem.embeddings.fake import FakeEmbedder
 from qasystem.ingestion.service import IngestionService
@@ -33,7 +33,6 @@ from qasystem.parsing.registry import ParserRegistry
 from qasystem.retrieval.gate import Thresholds, load_thresholds
 from qasystem.retrieval.service import RetrievalService
 from qasystem.storage.chroma_store import ChromaStore
-from qasystem.storage.embedding_cache import SqliteEmbeddingCache
 from qasystem.storage.lock import DataLock
 from qasystem.storage.sqlite_store import SqliteStore
 
@@ -95,9 +94,10 @@ async def build_services(settings: Settings, *, data_dir: str | Path | None = No
         store = SqliteStore(sqlite_path)
         registry = ParserRegistry(max_upload_mb=settings.max_upload_mb)
         chunker = Chunker(settings)
-        cache = SqliteEmbeddingCache(store)
 
-        embedder, client, model_id, dimension = await _build_embedder(settings, cache)
+        # The store *is* the cache: it satisfies `EmbeddingCache` structurally, so no adapter
+        # object stands between the two (D75).
+        embedder, client, model_id, dimension = await _build_embedder(settings, store)
         # The collection name carries model and dimension (L4) and the adapter asserts them
         # against stored metadata on open (I9), so a model change cannot silently reuse
         # another model's vectors.
@@ -145,7 +145,7 @@ async def build_services(settings: Settings, *, data_dir: str | Path | None = No
 
 
 async def _build_embedder(
-    settings: Settings, cache: SqliteEmbeddingCache
+    settings: Settings, cache: EmbeddingCache
 ) -> tuple[Embedder, EmbeddingClient | None, str, int]:
     """The embedder plus its identity, probed once.
 
